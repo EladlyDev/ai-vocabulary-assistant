@@ -1,17 +1,62 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet }) => {
+const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [] }) => {
   const [title, setTitle] = useState(set?.name || 'New Set');
   const [words, setWords] = useState(set?.words ? set.words.join('\n') : '');
   const [sourceLanguage, setSourceLanguage] = useState('Auto-detect');
   const [targetLanguage, setTargetLanguage] = useState('English');
   const [sourceDropdownOpen, setSourceDropdownOpen] = useState(false);
   const [targetDropdownOpen, setTargetDropdownOpen] = useState(false);
+  const [selectedGroupId, setSelectedGroupId] = useState(groups.length > 0 ? groups[0].id : null);
+  const [groupDropdownOpen, setGroupDropdownOpen] = useState(false);
+  
+  // Unsaved changes tracking
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [originalSet, setOriginalSet] = useState(null);
+  const [showUnsavedChangesModal, setShowUnsavedChangesModal] = useState(false);
+  const [pendingAction, setPendingAction] = useState(null);
   
   const sourceDropdownRef = useRef(null);
   const targetDropdownRef = useRef(null);
+  const groupDropdownRef = useRef(null);
 
   const languages = ['Spanish', 'French', 'German', 'English', 'Auto-detect'];
+
+  // Track original state for change detection
+  useEffect(() => {
+    if (!originalSet) {
+      const currentSet = {
+        name: title,
+        words: words.split('\n').filter(word => word.trim() !== '')
+      };
+      setOriginalSet(JSON.parse(JSON.stringify(currentSet)));
+    }
+  }, [title, words, originalSet]);
+
+  // Detect changes
+  useEffect(() => {
+    if (originalSet) {
+      const currentSet = {
+        name: title,
+        words: words.split('\n').filter(word => word.trim() !== '')
+      };
+      const hasChanges = JSON.stringify(currentSet) !== JSON.stringify(originalSet);
+      setHasUnsavedChanges(hasChanges);
+    }
+  }, [title, words, originalSet]);
+
+  // Prevent navigation with unsaved changes
+  useEffect(() => {
+    const handleBeforeUnload = (e) => {
+      if (hasUnsavedChanges) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [hasUnsavedChanges]);
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -21,6 +66,9 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet }) => {
       }
       if (targetDropdownRef.current && !targetDropdownRef.current.contains(event.target)) {
         setTargetDropdownOpen(false);
+      }
+      if (groupDropdownRef.current && !groupDropdownRef.current.contains(event.target)) {
+        setGroupDropdownOpen(false);
       }
     };
 
@@ -33,15 +81,52 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet }) => {
   const handleTitleChange = (e) => {
     const newTitle = e.target.value;
     setTitle(newTitle);
-    onUpdateSet({ ...set, name: newTitle });
   };
 
   const handleWordsChange = (e) => {
     const newWords = e.target.value;
     setWords(newWords);
-    // Convert textarea content back to array format
-    const wordsArray = newWords.split('\n').filter(word => word.trim() !== '');
-    onUpdateSet({ ...set, words: wordsArray });
+  };
+
+  const handleBack = () => {
+    if (hasUnsavedChanges) {
+      setPendingAction('back');
+      setShowUnsavedChangesModal(true);
+    } else {
+      onBack();
+    }
+  };
+
+  const handleSaveChanges = () => {
+    const wordsArray = words.split('\n').filter(word => word.trim() !== '');
+    if (title.trim() && wordsArray.length > 0) {
+      if (set?.id) {
+        onUpdateSet({ ...set, name: title, words: wordsArray });
+      } else {
+        onSaveSet({ name: title, words: wordsArray }, selectedGroupId);
+      }
+      
+      // Update original set to reflect saved state
+      const savedSet = {
+        name: title,
+        words: wordsArray
+      };
+      setOriginalSet(JSON.parse(JSON.stringify(savedSet)));
+      setHasUnsavedChanges(false);
+    }
+  };
+
+  const handleConfirmUnsavedChanges = () => {
+    if (pendingAction === 'back') {
+      onBack();
+    }
+    setShowUnsavedChangesModal(false);
+    setPendingAction(null);
+  };
+
+  const handleCancelUnsavedChanges = () => {
+    setShowUnsavedChangesModal(false);
+    setPendingAction(null);
   };
 
   // Mock enriched word data
@@ -54,37 +139,156 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet }) => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
-        
-        {/* Header */}
-        <div className="mb-8">
-          <div className="flex items-center space-x-4 mb-6">
+      {/* Sticky Header */}
+      <div className="sticky top-0 z-40 bg-white/70 backdrop-blur-md border-b border-gray-200/30">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6">
+          <div className="flex flex-col space-y-3 sm:space-y-0 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center space-x-2 sm:space-x-4 min-w-0 flex-1">
+              <button
+                onClick={handleBack}
+                className="flex items-center px-3 sm:px-4 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-50 rounded-lg transition-all duration-200 border border-gray-200 hover:border-gray-300 flex-shrink-0"
+              >
+                <svg className="w-4 h-4 mr-1 sm:mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
+                <span className="hidden sm:inline">Back</span>
+              </button>
+              
+              <div className="h-6 sm:h-8 w-px bg-gray-300 flex-shrink-0"></div>
+              
+              <div className="min-w-0 flex-1">
+                <h1 className="text-lg sm:text-2xl lg:text-3xl font-bold text-gray-900 truncate">
+                  {set?.id ? 'Edit Vocabulary Set' : 'Create New Vocabulary Set'}
+                </h1>
+                <p className="text-sm sm:text-base text-gray-600 mt-1">
+                  {words.split('\n').filter(word => word.trim()).length} words
+                  {set?.id ? ' (editing)' : ' (new set)'}
+                </p>
+              </div>
+            </div>
+            
+            {/* Save Button */}
             <button
-              onClick={onBack}
-              className="flex items-center px-4 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-50 rounded-lg transition-all duration-200 border border-gray-200 hover:border-gray-300"
+              onClick={handleSaveChanges}
+              disabled={!hasUnsavedChanges && !(!set?.id && title.trim() && words.trim())}
+              className={`inline-flex items-center justify-center px-3 sm:px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 shadow-sm hover:shadow-md flex-shrink-0 ${
+                hasUnsavedChanges || (!set?.id && title.trim() && words.trim())
+                  ? 'bg-blue-600 text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500' 
+                  : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+              }`}
             >
               <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
               </svg>
-              Back
+              <span className="hidden sm:inline">{set?.id ? 'Save Changes' : 'Create Set'}</span>
+              <span className="sm:hidden">{set?.id ? 'Save' : 'Create'}</span>
+              {hasUnsavedChanges && (
+                <div className="w-2 h-2 bg-red-400 rounded-full ml-2 animate-pulse"></div>
+              )}
             </button>
-            
-            <div className="h-8 w-px bg-gray-300"></div>
-            
-            <div className="flex-1">
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+
+        {/* Main Content Card - All sections combined */}
+        <div className="bg-white/80 backdrop-blur-sm rounded-xl shadow-md border border-gray-200/50 p-6 mb-8">
+          
+          {/* Set Title Input */}
+          <div className="mb-8">
+            <h2 className="text-lg font-semibold text-gray-900 mb-6 flex items-center">
+              <svg className="w-5 h-5 mr-3 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+              </svg>
+              Set Information
+            </h2>
+            <div className="space-y-2">
+              <label className="block text-sm font-semibold text-gray-700">
+                Set Title
+              </label>
               <input
                 type="text"
                 value={title}
                 onChange={handleTitleChange}
-                className="text-2xl sm:text-3xl font-bold text-gray-900 bg-transparent border-none outline-none focus:ring-0 placeholder-gray-400 w-full"
-                placeholder="Enter set title..."
+                placeholder="Enter set title (e.g., Spanish Basics, Business English)"
+                className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 hover:border-gray-300 text-gray-700 font-medium"
               />
             </div>
           </div>
-        </div>
-
-        {/* Main Content Card - All sections combined */}
-        <div className="bg-white/80 backdrop-blur-sm rounded-xl shadow-md border border-gray-200/50 p-6 mb-8">
+          
+          {/* Group Selection - Only show when creating new set */}
+          {!set?.id && groups.length > 0 && (
+            <div className="mb-8">
+              <h2 className="text-lg font-semibold text-gray-900 mb-6 flex items-center">
+                <svg className="w-5 h-5 mr-3 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14-7H5m14 14H5" />
+                </svg>
+                Group Selection
+              </h2>
+              <div className="space-y-2">
+                <label className="block text-sm font-semibold text-gray-700">
+                  Save to Group
+                </label>
+                <div className="relative" ref={groupDropdownRef}>
+                  <button
+                    onClick={() => setGroupDropdownOpen(!groupDropdownOpen)}
+                    className="w-full bg-white border-2 border-gray-200 rounded-xl px-4 py-3 text-left focus:border-purple-500 focus:ring-0 transition-all duration-200 hover:border-gray-300 text-gray-700 font-medium flex items-center justify-between"
+                  >
+                    <div className="flex items-center">
+                      {selectedGroupId && (
+                        <div className={`w-4 h-4 rounded-full mr-3 bg-gradient-to-r ${
+                          groups.find(g => g.id === selectedGroupId)?.color === 'blue' ? 'from-blue-500 to-blue-600' :
+                          groups.find(g => g.id === selectedGroupId)?.color === 'green' ? 'from-green-500 to-green-600' :
+                          groups.find(g => g.id === selectedGroupId)?.color === 'purple' ? 'from-purple-500 to-purple-600' :
+                          groups.find(g => g.id === selectedGroupId)?.color === 'red' ? 'from-red-500 to-red-600' :
+                          groups.find(g => g.id === selectedGroupId)?.color === 'yellow' ? 'from-yellow-500 to-yellow-600' :
+                          groups.find(g => g.id === selectedGroupId)?.color === 'pink' ? 'from-pink-500 to-pink-600' :
+                          groups.find(g => g.id === selectedGroupId)?.color === 'indigo' ? 'from-indigo-500 to-indigo-600' :
+                          'from-gray-500 to-gray-600'
+                        }`}></div>
+                      )}
+                      <span>{groups.find(g => g.id === selectedGroupId)?.name || 'Select a group'}</span>
+                    </div>
+                    <svg className={`w-5 h-5 text-gray-400 transition-transform duration-200 ${groupDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+                  {groupDropdownOpen && (
+                    <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-50 py-1 max-h-60 overflow-y-auto">
+                      {groups.map((group) => (
+                        <button
+                          key={group.id}
+                          onClick={() => {
+                            setSelectedGroupId(group.id);
+                            setGroupDropdownOpen(false);
+                          }}
+                          className="w-full text-left px-4 py-3 hover:bg-purple-50 transition-colors duration-150 text-gray-700 font-medium flex items-center"
+                        >
+                          <div className={`w-4 h-4 rounded-full mr-3 bg-gradient-to-r ${
+                            group.color === 'blue' ? 'from-blue-500 to-blue-600' :
+                            group.color === 'green' ? 'from-green-500 to-green-600' :
+                            group.color === 'purple' ? 'from-purple-500 to-purple-600' :
+                            group.color === 'red' ? 'from-red-500 to-red-600' :
+                            group.color === 'yellow' ? 'from-yellow-500 to-yellow-600' :
+                            group.color === 'pink' ? 'from-pink-500 to-pink-600' :
+                            group.color === 'indigo' ? 'from-indigo-500 to-indigo-600' :
+                            'from-gray-500 to-gray-600'
+                          }`}></div>
+                          <div>
+                            <div className="font-semibold">{group.name}</div>
+                            <div className="text-xs text-gray-500">
+                              {group.sets.length} set{group.sets.length !== 1 ? 's' : ''}
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
           
           {/* Language Selection */}
           <div className="mb-8">
@@ -199,27 +403,8 @@ leer"
                 Process Words
               </button>
               
-              {!set?.id && onSaveSet && (
-                <button 
-                  onClick={() => {
-                    const wordsArray = words.split('\n').filter(word => word.trim() !== '');
-                    if (title.trim() && wordsArray.length > 0) {
-                      onSaveSet({ name: title, words: wordsArray });
-                    }
-                  }}
-                  className="group relative bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white px-6 py-3 rounded-xl font-semibold transition-all duration-200 transform hover:scale-105 flex items-center w-full sm:w-auto justify-center"
-                >
-                  <svg className="w-5 h-5 mr-2 transition-transform duration-200 group-hover:scale-110" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
-                  </svg>
-                  Save Set
-                </button>
-              )}
             </div>
           </div>
-
-          {/* Divider */}
-          <div className="border-t border-gray-200 my-8"></div>
 
           {/* Preview Section */}
           <div>
@@ -292,6 +477,46 @@ leer"
             </div>
           </div>
         </div>
+
+        {/* Unsaved Changes Confirmation Modal */}
+        {showUnsavedChangesModal && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div className="bg-white rounded-xl shadow-2xl max-w-md w-full">
+              <div className="p-6">
+                <div className="flex items-center space-x-3 mb-4">
+                  <div className="w-12 h-12 bg-amber-100 rounded-full flex items-center justify-center">
+                    <svg className="w-6 h-6 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L5.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-semibold text-gray-900">Unsaved Changes</h3>
+                    <p className="text-sm text-gray-600 mt-1">You have unsaved changes</p>
+                  </div>
+                </div>
+                
+                <p className="text-gray-600 mb-6">
+                  You have unsaved changes that will be lost if you continue. Are you sure you want to proceed without saving?
+                </p>
+                
+                <div className="flex space-x-3">
+                  <button
+                    onClick={handleCancelUnsavedChanges}
+                    className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleConfirmUnsavedChanges}
+                    className="flex-1 px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors"
+                  >
+                    Discard Changes
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

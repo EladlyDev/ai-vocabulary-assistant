@@ -4,222 +4,239 @@ import SetEditor from './components/SetEditor';
 import SetViewer from './components/SetViewer';
 
 function App() {
-  // Enhanced mock data for word sets with richer word information
-  const [mockSets, setMockSets] = useState([
-    { 
-      id: 1, 
-      name: 'English→Arabic Essential Words', 
-      words: [
-        {
-          word: 'house',
-          translation: 'بيت',
-          sentence: 'I live in a beautiful house with my family.',
-          sentenceTranslation: 'أعيش في بيت جميل مع عائلتي.',
-          image: 'https://images.unsplash.com/photo-1564013799919-ab600027ffc6?w=400&h=300&fit=crop',
-          pronunciation: '/haʊs/',
-          tags: ['noun', 'home', 'family']
+  // Enhanced mock data with groups structure
+  const [groups, setGroups] = useState([
+    {
+      id: 1,
+      name: "Arabic Learning",
+      color: "blue",
+      sets: [
+        { 
+          id: 1, 
+          name: 'English→Arabic Essential Words', 
+          words: [
+            {
+              word: 'house',
+              translation: 'بيت',
+              sentence: 'I live in a beautiful house with my family.',
+              sentenceTranslation: 'أعيش في بيت جميل مع عائلتي.',
+              image: 'https://images.unsplash.com/photo-1564013799919-ab600027ffc6?w=400&h=300&fit=crop',
+              pronunciation: '/haʊs/',
+              tags: ['noun', 'home', 'family']
+            },
+            {
+              word: 'water',
+              translation: 'ماء',
+              sentence: 'Please drink more water to stay healthy.',
+              sentenceTranslation: 'من فضلك اشرب المزيد من الماء لتبقى بصحة جيدة.',
+              image: 'https://images.unsplash.com/photo-1548839140-29a749e1cf4d?w=400&h=300&fit=crop',
+              pronunciation: '/ˈwɔːtər/',
+              tags: ['noun', 'drink', 'health']
+            },
+            {
+              word: 'book',
+              translation: 'كتاب',
+              sentence: 'She reads a new book every week.',
+              sentenceTranslation: 'تقرأ كتاباً جديداً كل أسبوع.',
+              image: 'https://images.unsplash.com/photo-1481627834876-b7833e8f5570?w=400&h=300&fit=crop',
+              pronunciation: '/bʊk/',
+              tags: ['noun', 'education', 'reading']
+            },
+            {
+              word: 'food',
+              translation: 'طعام',
+              sentence: 'The restaurant serves delicious Middle Eastern food.',
+              sentenceTranslation: 'يقدم المطعم طعاماً شرق أوسطياً لذيذاً.',
+              image: 'https://images.unsplash.com/photo-1567620905732-2d1ec7ab7445?w=400&h=300&fit=crop',
+              pronunciation: '/fuːd/',
+              tags: ['noun', 'eating', 'cuisine']
+            },
+            {
+              word: 'friend',
+              translation: 'صديق',
+              sentence: 'My best friend always supports me.',
+              sentenceTranslation: 'أفضل صديق لي يدعمني دائماً.',
+              image: 'https://images.unsplash.com/photo-1491438590914-bc09fcaaf77a?w=400&h=300&fit=crop',
+              pronunciation: '/frend/',
+              tags: ['noun', 'relationship', 'social']
+            },
+            {
+              word: 'learn',
+              translation: 'يتعلم',
+              sentence: 'Students learn Arabic at the university.',
+              sentenceTranslation: 'يتعلم الطلاب اللغة العربية في الجامعة.',
+              image: 'https://images.unsplash.com/photo-1434030216411-0b793f4b4173?w=400&h=300&fit=crop',
+              pronunciation: '/lɜːrn/',
+              tags: ['verb', 'education', 'studying']
+            }
+          ]
         },
-        {
-          word: 'water',
-          translation: 'ماء',
-          sentence: 'Please drink more water to stay healthy.',
-          sentenceTranslation: 'من فضلك اشرب المزيد من الماء لتبقى بصحة جيدة.',
-          image: 'https://images.unsplash.com/photo-1548839140-29a749e1cf4d?w=400&h=300&fit=crop',
-          pronunciation: '/ˈwɔːtər/',
-          tags: ['noun', 'drink', 'health']
+        { 
+          id: 4, 
+          name: 'English→Arabic Verbs', 
+          words: [
+            {
+              word: 'study',
+              translation: 'يدرس',
+              sentence: 'Ahmad studies Arabic literature at the university.',
+              sentenceTranslation: 'يدرس أحمد الأدب العربي في الجامعة.',
+              image: 'https://images.unsplash.com/photo-1434030216411-0b793f4b4173?w=400&h=300&fit=crop',
+              pronunciation: '/ˈstʌdi/',
+              tags: ['verb', 'education', 'learning']
+            },
+            {
+              word: 'travel',
+              translation: 'يسافر',
+              sentence: 'They travel to Egypt every summer.',
+              sentenceTranslation: 'يسافرون إلى مصر كل صيف.',
+              image: 'https://images.unsplash.com/photo-1488646953014-85cb44e25828?w=400&h=300&fit=crop',
+              pronunciation: '/ˈtrævəl/',
+              tags: ['verb', 'journey', 'vacation']
+            },
+            {
+              word: 'cook',
+              translation: 'يطبخ',
+              sentence: 'My mother cooks traditional Arabic dishes.',
+              sentenceTranslation: 'تطبخ أمي الأطباق العربية التقليدية.',
+              image: 'https://images.unsplash.com/photo-1556909114-f6e7ad7d3136?w=400&h=300&fit=crop',
+              pronunciation: '/kʊk/',
+              tags: ['verb', 'food', 'kitchen']
+            },
+            {
+              word: 'write',
+              translation: 'يكتب',
+              sentence: 'The journalist writes articles about Middle Eastern culture.',
+              sentenceTranslation: 'يكتب الصحفي مقالات عن الثقافة الشرق أوسطية.',
+              image: 'https://images.unsplash.com/photo-1455390582262-044cdead277a?w=400&h=300&fit=crop',
+              pronunciation: '/raɪt/',
+              tags: ['verb', 'communication', 'journalism']
+            },
+            {
+              word: 'help',
+              translation: 'يساعد',
+              sentence: 'Good friends always help each other.',
+              sentenceTranslation: 'الأصدقاء الجيدون يساعدون بعضهم البعض دائماً.',
+              image: 'https://images.unsplash.com/photo-1559027615-cd4628902d4a?w=400&h=300&fit=crop',
+              pronunciation: '/help/',
+              tags: ['verb', 'assistance', 'social']
+            }
+          ]
         },
-        {
-          word: 'book',
-          translation: 'كتاب',
-          sentence: 'She reads a new book every week.',
-          sentenceTranslation: 'تقرأ كتاباً جديداً كل أسبوع.',
-          image: 'https://images.unsplash.com/photo-1481627834876-b7833e8f5570?w=400&h=300&fit=crop',
-          pronunciation: '/bʊk/',
-          tags: ['noun', 'education', 'reading']
-        },
-        {
-          word: 'food',
-          translation: 'طعام',
-          sentence: 'The restaurant serves delicious Middle Eastern food.',
-          sentenceTranslation: 'يقدم المطعم طعاماً شرق أوسطياً لذيذاً.',
-          image: 'https://images.unsplash.com/photo-1567620905732-2d1ec7ab7445?w=400&h=300&fit=crop',
-          pronunciation: '/fuːd/',
-          tags: ['noun', 'eating', 'cuisine']
-        },
-        {
-          word: 'friend',
-          translation: 'صديق',
-          sentence: 'My best friend always supports me.',
-          sentenceTranslation: 'أفضل صديق لي يدعمني دائماً.',
-          image: 'https://images.unsplash.com/photo-1491438590914-bc09fcaaf77a?w=400&h=300&fit=crop',
-          pronunciation: '/frend/',
-          tags: ['noun', 'relationship', 'social']
-        },
-        {
-          word: 'learn',
-          translation: 'يتعلم',
-          sentence: 'Students learn Arabic at the university.',
-          sentenceTranslation: 'يتعلم الطلاب اللغة العربية في الجامعة.',
-          image: 'https://images.unsplash.com/photo-1434030216411-0b793f4b4173?w=400&h=300&fit=crop',
-          pronunciation: '/lɜːrn/',
-          tags: ['verb', 'education', 'studying']
+        { 
+          id: 3, 
+          name: 'Arabic Business Vocabulary', 
+          words: [
+            {
+              word: 'عمل',
+              translation: 'work / business',
+              sentence: 'العمل في هذه الشركة ممتع ومفيد.',
+              sentenceTranslation: 'Working at this company is enjoyable and beneficial.',
+              image: 'https://images.unsplash.com/photo-1486312338219-ce68d2c6f44d?w=400&h=300&fit=crop',
+              pronunciation: '/ʕamal/',
+              tags: ['noun', 'business', 'career']
+            },
+            {
+              word: 'اجتماع',
+              translation: 'meeting',
+              sentence: 'لدينا اجتماع مهم غداً في الصباح.',
+              sentenceTranslation: 'We have an important meeting tomorrow morning.',
+              image: 'https://images.unsplash.com/photo-1556761175-b413da4baf72?w=400&h=300&fit=crop',
+              pronunciation: '/ɪdʒtɪmaːʕ/',
+              tags: ['noun', 'business', 'communication']
+            },
+            {
+              word: 'مشروع',
+              translation: 'project',
+              sentence: 'هذا المشروع سيغير مستقبل الشركة.',
+              sentenceTranslation: 'This project will change the future of the company.',
+              image: 'https://images.unsplash.com/photo-1460925895917-afdab827c52f?w=400&h=300&fit=crop',
+              pronunciation: '/maʃruːʕ/',
+              tags: ['noun', 'business', 'planning']
+            },
+            {
+              word: 'عميل',
+              translation: 'client / customer',
+              sentence: 'رضا العميل هو أولويتنا الأولى.',
+              sentenceTranslation: 'Customer satisfaction is our top priority.',
+              image: 'https://images.unsplash.com/photo-1559136555-9303baea8ebd?w=400&h=300&fit=crop',
+              pronunciation: '/ʕamiːl/',
+              tags: ['noun', 'business', 'customer service']
+            }
+          ]
         }
       ]
     },
-    { 
-      id: 2, 
-      name: 'German→Arabic Daily Life', 
-      words: [
-        {
-          word: 'das Haus',
-          translation: 'البيت',
-          sentence: 'Unser Haus ist sehr gemütlich und warm.',
-          sentenceTranslation: 'بيتنا مريح ودافئ جداً.',
-          image: 'https://images.unsplash.com/photo-1570129477492-45c003edd2be?w=400&h=300&fit=crop',
-          pronunciation: '/das haʊs/',
-          tags: ['noun', 'home', 'architecture']
-        },
-        {
-          word: 'die Familie',
-          translation: 'العائلة',
-          sentence: 'Meine Familie kommt aus Deutschland.',
-          sentenceTranslation: 'عائلتي من ألمانيا.',
-          image: 'https://images.unsplash.com/photo-1511895426328-dc8714191300?w=400&h=300&fit=crop',
-          pronunciation: '/diː faˈmiːliə/',
-          tags: ['noun', 'family', 'relationship']
-        },
-        {
-          word: 'arbeiten',
-          translation: 'يعمل',
-          sentence: 'Ich arbeite jeden Tag von neun bis fünf.',
-          sentenceTranslation: 'أعمل كل يوم من التاسعة إلى الخامسة.',
-          image: 'https://images.unsplash.com/photo-1560472354-b33ff0c44a43?w=400&h=300&fit=crop',
-          pronunciation: '/ˈaʁbaɪtən/',
-          tags: ['verb', 'work', 'daily']
-        },
-        {
-          word: 'das Brot',
-          translation: 'الخبز',
-          sentence: 'Deutsches Brot ist sehr lecker und gesund.',
-          sentenceTranslation: 'الخبز الألماني لذيذ جداً وصحي.',
-          image: 'https://images.unsplash.com/photo-1509440159596-0249088772ff?w=400&h=300&fit=crop',
-          pronunciation: '/das broːt/',
-          tags: ['noun', 'food', 'bakery']
-        },
-        {
-          word: 'sprechen',
-          translation: 'يتحدث',
-          sentence: 'Wir sprechen Deutsch und Arabisch zu Hause.',
-          sentenceTranslation: 'نتحدث الألمانية والعربية في البيت.',
-          image: 'https://images.unsplash.com/photo-1517486808906-6ca8b3f04846?w=400&h=300&fit=crop',
-          pronunciation: '/ˈʃprɛçən/',
-          tags: ['verb', 'communication', 'language']
-        },
-        {
-          word: 'die Zeit',
-          translation: 'الوقت',
-          sentence: 'Haben Sie Zeit für einen Kaffee?',
-          sentenceTranslation: 'هل لديك وقت لشرب القهوة؟',
-          image: 'https://images.unsplash.com/photo-1501139083538-0139583c060f?w=400&h=300&fit=crop',
-          pronunciation: '/diː tsaɪt/',
-          tags: ['noun', 'time', 'abstract']
-        }
-      ]
-    },
-    { 
-      id: 3, 
-      name: 'Arabic Business Vocabulary', 
-      words: [
-        {
-          word: 'عمل',
-          translation: 'work / business',
-          sentence: 'العمل في هذه الشركة ممتع ومفيد.',
-          sentenceTranslation: 'Working at this company is enjoyable and beneficial.',
-          image: 'https://images.unsplash.com/photo-1486312338219-ce68d2c6f44d?w=400&h=300&fit=crop',
-          pronunciation: '/ʕamal/',
-          tags: ['noun', 'business', 'career']
-        },
-        {
-          word: 'اجتماع',
-          translation: 'meeting',
-          sentence: 'لدينا اجتماع مهم غداً في الصباح.',
-          sentenceTranslation: 'We have an important meeting tomorrow morning.',
-          image: 'https://images.unsplash.com/photo-1556761175-b413da4baf72?w=400&h=300&fit=crop',
-          pronunciation: '/ɪdʒtɪmaːʕ/',
-          tags: ['noun', 'business', 'communication']
-        },
-        {
-          word: 'مشروع',
-          translation: 'project',
-          sentence: 'هذا المشروع سيغير مستقبل الشركة.',
-          sentenceTranslation: 'This project will change the future of the company.',
-          image: 'https://images.unsplash.com/photo-1460925895917-afdab827c52f?w=400&h=300&fit=crop',
-          pronunciation: '/maʃruːʕ/',
-          tags: ['noun', 'business', 'planning']
-        },
-        {
-          word: 'عميل',
-          translation: 'client / customer',
-          sentence: 'رضا العميل هو أولويتنا الأولى.',
-          sentenceTranslation: 'Customer satisfaction is our top priority.',
-          image: 'https://images.unsplash.com/photo-1559136555-9303baea8ebd?w=400&h=300&fit=crop',
-          pronunciation: '/ʕamiːl/',
-          tags: ['noun', 'business', 'customer service']
-        }
-      ]
-    },
-    { 
-      id: 4, 
-      name: 'English→Arabic Verbs', 
-      words: [
-        {
-          word: 'study',
-          translation: 'يدرس',
-          sentence: 'Ahmad studies Arabic literature at the university.',
-          sentenceTranslation: 'يدرس أحمد الأدب العربي في الجامعة.',
-          image: 'https://images.unsplash.com/photo-1434030216411-0b793f4b4173?w=400&h=300&fit=crop',
-          pronunciation: '/ˈstʌdi/',
-          tags: ['verb', 'education', 'learning']
-        },
-        {
-          word: 'travel',
-          translation: 'يسافر',
-          sentence: 'They travel to Egypt every summer.',
-          sentenceTranslation: 'يسافرون إلى مصر كل صيف.',
-          image: 'https://images.unsplash.com/photo-1488646953014-85cb44e25828?w=400&h=300&fit=crop',
-          pronunciation: '/ˈtrævəl/',
-          tags: ['verb', 'journey', 'vacation']
-        },
-        {
-          word: 'cook',
-          translation: 'يطبخ',
-          sentence: 'My mother cooks traditional Arabic dishes.',
-          sentenceTranslation: 'تطبخ أمي الأطباق العربية التقليدية.',
-          image: 'https://images.unsplash.com/photo-1556909114-f6e7ad7d3136?w=400&h=300&fit=crop',
-          pronunciation: '/kʊk/',
-          tags: ['verb', 'food', 'kitchen']
-        },
-        {
-          word: 'write',
-          translation: 'يكتب',
-          sentence: 'The journalist writes articles about Middle Eastern culture.',
-          sentenceTranslation: 'يكتب الصحفي مقالات عن الثقافة الشرق أوسطية.',
-          image: 'https://images.unsplash.com/photo-1455390582262-044cdead277a?w=400&h=300&fit=crop',
-          pronunciation: '/raɪt/',
-          tags: ['verb', 'communication', 'journalism']
-        },
-        {
-          word: 'help',
-          translation: 'يساعد',
-          sentence: 'Good friends always help each other.',
-          sentenceTranslation: 'الأصدقاء الجيدون يساعدون بعضهم البعض دائماً.',
-          image: 'https://images.unsplash.com/photo-1559027615-cd4628902d4a?w=400&h=300&fit=crop',
-          pronunciation: '/help/',
-          tags: ['verb', 'assistance', 'social']
+    {
+      id: 2,
+      name: "European Languages",
+      color: "purple",
+      sets: [
+        { 
+          id: 2, 
+          name: 'German→Arabic Daily Life', 
+          words: [
+            {
+              word: 'das Haus',
+              translation: 'البيت',
+              sentence: 'Unser Haus ist sehr gemütlich und warm.',
+              sentenceTranslation: 'بيتنا مريح ودافئ جداً.',
+              image: 'https://images.unsplash.com/photo-1570129477492-45c003edd2be?w=400&h=300&fit=crop',
+              pronunciation: '/das haʊs/',
+              tags: ['noun', 'home', 'architecture']
+            },
+            {
+              word: 'die Familie',
+              translation: 'العائلة',
+              sentence: 'Meine Familie kommt aus Deutschland.',
+              sentenceTranslation: 'عائلتي من ألمانيا.',
+              image: 'https://images.unsplash.com/photo-1511895426328-dc8714191300?w=400&h=300&fit=crop',
+              pronunciation: '/diː faˈmiːliə/',
+              tags: ['noun', 'family', 'relationship']
+            },
+            {
+              word: 'arbeiten',
+              translation: 'يعمل',
+              sentence: 'Ich arbeite jeden Tag von neun bis fünf.',
+              sentenceTranslation: 'أعمل كل يوم من التاسعة إلى الخامسة.',
+              image: 'https://images.unsplash.com/photo-1560472354-b33ff0c44a43?w=400&h=300&fit=crop',
+              pronunciation: '/ˈaʁbaɪtən/',
+              tags: ['verb', 'work', 'daily']
+            },
+            {
+              word: 'das Brot',
+              translation: 'الخبز',
+              sentence: 'Deutsches Brot ist sehr lecker und gesund.',
+              sentenceTranslation: 'الخبز الألماني لذيذ جداً وصحي.',
+              image: 'https://images.unsplash.com/photo-1509440159596-0249088772ff?w=400&h=300&fit=crop',
+              pronunciation: '/das broːt/',
+              tags: ['noun', 'food', 'bakery']
+            },
+            {
+              word: 'sprechen',
+              translation: 'يتحدث',
+              sentence: 'Wir sprechen Deutsch und Arabisch zu Hause.',
+              sentenceTranslation: 'نتحدث الألمانية والعربية في البيت.',
+              image: 'https://images.unsplash.com/photo-1517486808906-6ca8b3f04846?w=400&h=300&fit=crop',
+              pronunciation: '/ˈʃprɛçən/',
+              tags: ['verb', 'communication', 'language']
+            },
+            {
+              word: 'die Zeit',
+              translation: 'الوقت',
+              sentence: 'Haben Sie Zeit für einen Kaffee?',
+              sentenceTranslation: 'هل لديك وقت لشرب القهوة؟',
+              image: 'https://images.unsplash.com/photo-1501139083538-0139583c060f?w=400&h=300&fit=crop',
+              pronunciation: '/diː tsaɪt/',
+              tags: ['noun', 'time', 'abstract']
+            }
+          ]
         }
       ]
     }
   ]);
+
+  // Flatten sets for backward compatibility with existing code
+  const mockSets = groups.flatMap(group => group.sets.map(set => ({ ...set, groupId: group.id, groupName: group.name })));
 
   const [currentView, setCurrentView] = useState({ name: 'dashboard' });
   const [activeSet, setActiveSet] = useState(null);
@@ -240,32 +257,121 @@ function App() {
   };
 
   const handleDeleteSet = (setId) => {
-    setMockSets(prevSets => prevSets.filter(set => set.id !== setId));
+    setGroups(prevGroups => 
+      prevGroups.map(group => ({
+        ...group,
+        sets: group.sets.filter(set => set.id !== setId)
+      }))
+    );
   };
 
   const handleUpdateSet = (updatedSet) => {
     setActiveSet(updatedSet);
     
-    // Update in mockSets if it exists (has an ID)
+    // Update in groups if it exists (has an ID)
     if (updatedSet.id) {
-      setMockSets(prevSets => 
-        prevSets.map(set => 
-          set.id === updatedSet.id ? updatedSet : set
-        )
+      setGroups(prevGroups => 
+        prevGroups.map(group => ({
+          ...group,
+          sets: group.sets.map(set => 
+            set.id === updatedSet.id ? updatedSet : set
+          )
+        }))
       );
     }
   };
 
-  const handleSaveNewSet = (newSet) => {
+  const handleSaveNewSet = (newSet, targetGroupId = null) => {
     if (newSet.name.trim() && newSet.words.length > 0) {
       const setWithId = {
         ...newSet,
         id: Date.now() // Simple ID generation
       };
-      setMockSets(prevSets => [...prevSets, setWithId]);
+      
+      setGroups(prevGroups => {
+        // If no groups exist, create a default group
+        if (prevGroups.length === 0) {
+          return [{
+            id: Date.now(),
+            name: "My Vocabulary Sets",
+            color: "blue",
+            sets: [setWithId]
+          }];
+        }
+        
+        // If target group specified, add to that group
+        if (targetGroupId) {
+          return prevGroups.map(group => 
+            group.id === targetGroupId 
+              ? { ...group, sets: [...group.sets, setWithId] }
+              : group
+          );
+        }
+        
+        // Default: add to first group
+        return prevGroups.map((group, index) => 
+          index === 0 ? { ...group, sets: [...group.sets, setWithId] } : group
+        );
+      });
+      
       setCurrentView({ name: 'dashboard' });
       setActiveSet(null);
     }
+  };
+
+  const handleCreateGroup = (groupData) => {
+    const newGroup = {
+      id: Date.now(),
+      name: groupData.name || "New Group",
+      color: groupData.color || "blue",
+      sets: []
+    };
+    setGroups(prevGroups => [...prevGroups, newGroup]);
+  };
+
+  const handleUpdateGroup = (groupId, updatedData) => {
+    // Special case for reordering groups
+    if (groupId === 'reorder' && Array.isArray(updatedData)) {
+      setGroups(updatedData);
+      return;
+    }
+    
+    setGroups(prevGroups => 
+      prevGroups.map(group => 
+        group.id === groupId ? { ...group, ...updatedData } : group
+      )
+    );
+  };
+
+  const handleDeleteGroup = (groupId) => {
+    setGroups(prevGroups => prevGroups.filter(group => group.id !== groupId));
+  };
+
+  const handleMoveSetToGroup = (setId, targetGroupId) => {
+    setGroups(prevGroups => {
+      // Find the set and remove it from current group
+      let setToMove = null;
+      const groupsWithoutSet = prevGroups.map(group => ({
+        ...group,
+        sets: group.sets.filter(set => {
+          if (set.id === setId) {
+            setToMove = set;
+            return false;
+          }
+          return true;
+        })
+      }));
+
+      // Add the set to target group
+      if (setToMove) {
+        return groupsWithoutSet.map(group => 
+          group.id === targetGroupId 
+            ? { ...group, sets: [...group.sets, setToMove] }
+            : group
+        );
+      }
+      return groupsWithoutSet;
+    });
   };
 
   const handleShowDashboard = () => {
@@ -285,7 +391,13 @@ function App() {
         <Dashboard 
           onCreateNewSet={handleCreateNewSet}
           onOpenSet={handleOpenSet}
-          sets={mockSets}
+          groups={groups}
+          mockSets={mockSets}
+          onCreateGroup={handleCreateGroup}
+          onUpdateGroup={handleUpdateGroup}
+          onDeleteGroup={handleDeleteGroup}
+          onDeleteSet={handleDeleteSet}
+          onMoveSetToGroup={handleMoveSetToGroup}
         />
       )}
       {currentView.name === 'editor' && (
@@ -294,6 +406,7 @@ function App() {
           onBack={handleShowDashboard}
           onUpdateSet={setActiveSet}
           onSaveSet={handleSaveNewSet}
+          groups={groups}
         />
       )}
       {currentView.name === 'viewer' && (
