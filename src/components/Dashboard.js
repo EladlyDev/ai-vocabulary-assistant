@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useAuth } from '../contexts/AuthContext';
 import ExportModal from './ExportModal';
 import BackToTop from './BackToTop';
 
 const Dashboard = ({ onCreateNewSet, onOpenSet, groups, mockSets, onCreateGroup, onUpdateGroup, onDeleteGroup, onDeleteSet, onMoveSetToGroup }) => {
+  const { user, signOut } = useAuth();
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportingSet, setExportingSet] = useState(null);
   const [groupsDropdownOpen, setGroupsDropdownOpen] = useState({});
@@ -26,6 +28,11 @@ const Dashboard = ({ onCreateNewSet, onOpenSet, groups, mockSets, onCreateGroup,
   // Calculate total sets and words from groups
   const totalSets = mockSets ? mockSets.length : 0;
   const totalWords = mockSets ? mockSets.reduce((total, set) => total + set.words.length, 0) : 0;
+
+  const handleLogout = async () => {
+    await signOut();
+    // Navigation will be handled automatically by the AuthContext and ProtectedRoute
+  };
 
   const handleExportComplete = () => {
     console.log('Export completed successfully');
@@ -290,6 +297,25 @@ const Dashboard = ({ onCreateNewSet, onOpenSet, groups, mockSets, onCreateGroup,
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12">
+        
+        {/* User Menu Bar */}
+        <div className="flex justify-end items-center mb-4">
+          <div className="flex items-center space-x-3">
+            <span className="text-sm text-gray-600 hidden sm:inline">
+              {user?.email}
+            </span>
+            <button
+              onClick={handleLogout}
+              className="inline-flex items-center px-3 sm:px-4 py-2 text-sm font-medium text-gray-700 bg-white/80 backdrop-blur-sm rounded-lg border border-gray-200 hover:bg-gray-50 hover:border-gray-300 transition-all duration-200 shadow-sm"
+            >
+              <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
+              <span className="hidden sm:inline">Logout</span>
+              <span className="sm:hidden">Exit</span>
+            </button>
+          </div>
+        </div>
         
         {/* Hero Section */}
         <div className="text-center mb-8 sm:mb-12">
