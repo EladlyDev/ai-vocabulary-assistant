@@ -27,7 +27,7 @@ const Dashboard = ({ onCreateNewSet, onOpenSet, groups, mockSets, onCreateGroup,
 
   // Calculate total sets and words from groups
   const totalSets = mockSets ? mockSets.length : 0;
-  const totalWords = mockSets ? mockSets.reduce((total, set) => total + set.words.length, 0) : 0;
+  const totalWords = mockSets ? mockSets.reduce((total, set) => total + (set.word_count || set.words?.length || 0), 0) : 0;
 
   const handleLogout = async () => {
     await signOut();
@@ -38,9 +38,30 @@ const Dashboard = ({ onCreateNewSet, onOpenSet, groups, mockSets, onCreateGroup,
     console.log('Export completed successfully');
   };
 
-  const openExportModal = (set) => {
+  const openExportModal = async (set) => {
     console.log('Opening export modal for set:', set.name);
-    setExportingSet(set);
+    
+    // Fetch words if not already loaded
+    if (!set.words || set.words.length === 0) {
+      try {
+        const { fetchWordsBySet } = await import('../services/words');
+        const wordsData = await fetchWordsBySet(set.id);
+        setExportingSet({
+          ...set,
+          words: wordsData || []
+        });
+      } catch (err) {
+        console.error('Failed to fetch words for export:', err);
+        // Still show modal with empty words array
+        setExportingSet({
+          ...set,
+          words: []
+        });
+      }
+    } else {
+      setExportingSet(set);
+    }
+    
     setShowExportModal(true);
   };
 
@@ -140,7 +161,12 @@ const Dashboard = ({ onCreateNewSet, onOpenSet, groups, mockSets, onCreateGroup,
 
   const handleSaveGroupEdit = () => {
     if (editingGroup) {
-      onUpdateGroup(editingGroup.id, editingGroup);
+      // Only send the fields that should be updated
+      const updates = {
+        name: editingGroup.name,
+        color: editingGroup.color
+      };
+      onUpdateGroup(editingGroup.id, updates);
       setShowGroupEditModal(false);
       setEditingGroup(null);
     }
@@ -573,14 +599,14 @@ const Dashboard = ({ onCreateNewSet, onOpenSet, groups, mockSets, onCreateGroup,
                         <div className="min-w-0 flex-1">
                           <h2 className="text-lg sm:text-2xl font-bold text-gray-900 text-left truncate">{group.name}</h2>
                           <p className="text-xs sm:text-sm text-gray-500 text-left">
-                            {group.sets.length} set{group.sets.length !== 1 ? 's' : ''} • {group.sets.reduce((total, set) => total + set.words.length, 0)} words
+                            {group.sets.length} set{group.sets.length !== 1 ? 's' : ''} • {group.sets.reduce((total, set) => total + (set.word_count || set.words?.length || 0), 0)} words
                           </p>
                         </div>
                       </div>
                       
                       <div className="flex items-center space-x-1 sm:space-x-3 flex-shrink-0">
                         <div className={`text-xs sm:text-sm text-white bg-gradient-to-r ${getGroupColor(group.color)} px-2 sm:px-3 py-1 rounded-full hidden sm:block`}>
-                          {group.sets.reduce((total, set) => total + set.words.length, 0)} total words
+                          {group.sets.reduce((total, set) => total + (set.word_count || set.words?.length || 0), 0)} total words
                         </div>
                         <svg 
                           className={`w-5 h-5 sm:w-6 sm:h-6 text-gray-400 transition-transform duration-300 ${
@@ -704,12 +730,12 @@ const Dashboard = ({ onCreateNewSet, onOpenSet, groups, mockSets, onCreateGroup,
                                           </h3>
                                           <div className="flex flex-col sm:flex-row sm:items-center sm:space-x-2 mt-1 space-y-1 sm:space-y-0">
                                             <p className="text-xs text-gray-600">
-                                              {set.words.length} word{set.words.length !== 1 ? 's' : ''}
+                                              {(set.word_count || set.words?.length || 0)} word{(set.word_count || set.words?.length || 0) !== 1 ? 's' : ''}
                                             </p>
                                             {/* Preview words - responsive layout */}
-                                            {set.words.length > 0 && (
+                                            {(set.word_count || set.words?.length || 0) > 0 && set.words && (
                                               <div className="flex flex-wrap gap-1 overflow-hidden">
-                                                {set.words.slice(0, 3).map((word, index) => {
+                                                {(set.words || []).slice(0, 3).map((word, index) => {
                                                   const wordText = typeof word === 'string' ? word : word.word;
                                                   return (
                                                     <span
@@ -720,10 +746,10 @@ const Dashboard = ({ onCreateNewSet, onOpenSet, groups, mockSets, onCreateGroup,
                                                     </span>
                                                   );
                                                 })}
-                                                {set.words.length > 3 && (
+                                                {(set.word_count || set.words?.length || 0) > 3 && (
                                                   <span className="px-1.5 py-0.5 bg-gray-100 text-gray-500 text-xs rounded-full">
-                                                    <span className="sm:hidden">+{set.words.length - 1}</span>
-                                                    <span className="hidden sm:inline">+{set.words.length - 3}</span>
+                                                    <span className="sm:hidden">+{(set.word_count || set.words?.length || 0) - 1}</span>
+                                                    <span className="hidden sm:inline">+{(set.word_count || set.words?.length || 0) - 3}</span>
                                                   </span>
                                                 )}
                                               </div>
@@ -1049,7 +1075,7 @@ const Dashboard = ({ onCreateNewSet, onOpenSet, groups, mockSets, onCreateGroup,
               
               <p className="text-gray-600 mb-6">
                 Are you sure you want to delete the vocabulary set <strong>"{setToDelete.name}"</strong> 
-                with {setToDelete.words.length} word{setToDelete.words.length !== 1 ? 's' : ''}?
+                with {(setToDelete.word_count || setToDelete.words?.length || 0)} word{(setToDelete.word_count || setToDelete.words?.length || 0) !== 1 ? 's' : ''}?
               </p>
               
               <div className="flex space-x-3">

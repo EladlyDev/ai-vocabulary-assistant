@@ -2,7 +2,21 @@ import React, { useState, useEffect, useRef } from 'react';
 import ExportModal from './ExportModal';
 import BackToTop from './BackToTop';
 
-const SetViewer = ({ set, onBack, onUpdateSet, onDeleteSet, viewMode, onViewModeChange, searchTerm, onSearchChange }) => {
+const SetViewer = ({ 
+  set, 
+  onBack, 
+  onUpdateSet, 
+  onDeleteSet, 
+  onUpdateWord,
+  onDeleteWord,
+  onCreateWord,
+  viewMode, 
+  onViewModeChange, 
+  searchTerm, 
+  onSearchChange,
+  isUpdatingWord,
+  isDeletingWord
+}) => {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [editingCard, setEditingCard] = useState(null);
@@ -146,14 +160,69 @@ const SetViewer = ({ set, onBack, onUpdateSet, onDeleteSet, viewMode, onViewMode
       setEditingValue('');
     }
     
+    // Create new words in database
+    if (onCreateWord) {
+      const wordCreationPromises = [];
+      const wordsToCreate = [];
+      
+      for (const word of filteredWords) {
+        const wordObj = typeof word === 'string' ? { word } : word;
+        // Only create if word doesn't have an ID (new word)
+        if (!wordObj.id || wordObj.id.startsWith('temp-')) {
+          wordsToCreate.push(wordObj);
+          wordCreationPromises.push(
+            onCreateWord({
+              set_id: set.id,
+              word: wordObj.word,
+              translation: wordObj.translation || '',
+              sentence: wordObj.sentence || null,
+              sentence_translation: wordObj.sentenceTranslation || null,
+              example: wordObj.example || null,
+              image_url: wordObj.image || null,
+              pronunciation: wordObj.pronunciation || null,
+              synonyms: [],
+              antonyms: [],
+              tags: wordObj.tags || []
+            })
+          );
+        }
+      }
+      
+      // Wait for all words to be created
+      if (wordCreationPromises.length > 0) {
+        const createdWords = await Promise.all(wordCreationPromises);
+        
+        // Update the set with the created words (they now have IDs)
+        const updatedWords = filteredWords.map(word => {
+          const wordObj = typeof word === 'string' ? { word } : word;
+          if (!wordObj.id || wordObj.id.startsWith('temp-')) {
+            // Find the corresponding created word
+            const createdWord = createdWords.find(cw => cw.word === wordObj.word);
+            return createdWord || wordObj;
+          }
+          return wordObj;
+        });
+        
+        // Update set with words that now have IDs
+        const updatedSet = { ...set, words: updatedWords };
+        onUpdateSet(updatedSet);
+        setOriginalSet(JSON.parse(JSON.stringify(updatedSet)));
+      } else {
+        setOriginalSet(JSON.parse(JSON.stringify(set)));
+      }
+      
+      setHasUnsavedChanges(false);
+      setIsCreatingNewCard(false);
+    } else {
+      // No word creation handler, just save locally
+      setOriginalSet(JSON.parse(JSON.stringify({ ...set, words: filteredWords })));
+      setHasUnsavedChanges(false);
+      setIsCreatingNewCard(false);
+    }
+    
     if (filteredWords.length !== set.words.length) {
       onUpdateSet({ ...set, words: filteredWords });
     }
-    
-    // Save current changes
-    setOriginalSet(JSON.parse(JSON.stringify({ ...set, words: filteredWords })));
-    setHasUnsavedChanges(false);
-    setIsCreatingNewCard(false);
     
     // Generate AI content only for words that have AI generation requested
     const wordsToEnrich = filteredWords.filter(word => {
@@ -178,16 +247,27 @@ const SetViewer = ({ set, onBack, onUpdateSet, onDeleteSet, viewMode, onViewMode
   };
 
   const updateWordField = (index, field, value) => {
-    const updatedWords = [...set.words];
-    if (typeof updatedWords[index] === 'string') {
-      // Convert simple string to object
-      updatedWords[index] = { word: updatedWords[index] };
+    const word = set.words[index];
+    
+    // If word doesn't have an ID yet (new word not saved), just update locally
+    if (!word.id || word.id.startsWith('temp-')) {
+      const updatedWords = [...set.words];
+      if (typeof updatedWords[index] === 'string') {
+        // Convert simple string to object
+        updatedWords[index] = { word: updatedWords[index] };
+      }
+      updatedWords[index] = { ...updatedWords[index], [field]: value };
+      onUpdateSet({ ...set, words: updatedWords });
+    } else {
+      // Update in database
+      const updates = { [field]: value };
+      onUpdateWord(word.id, updates, set.id);
     }
-    updatedWords[index] = { ...updatedWords[index], [field]: value };
-    onUpdateSet({ ...set, words: updatedWords });
   };
 
   const deleteWord = (index) => {
+    const word = set.words[index];
+    
     // If deleting a card that was being created, reset the creation state
     if (isCreatingNewCard && index === 0) {
       setIsCreatingNewCard(false);
@@ -196,8 +276,14 @@ const SetViewer = ({ set, onBack, onUpdateSet, onDeleteSet, viewMode, onViewMode
       setEditingValue('');
     }
     
-    const updatedWords = set.words.filter((_, i) => i !== index);
-    onUpdateSet({ ...set, words: updatedWords });
+    // If word has an ID, delete from database
+    if (word.id && !word.id.startsWith('temp-')) {
+      onDeleteWord(word.id, set.id);
+    } else {
+      // Just remove locally for unsaved words
+      const updatedWords = set.words.filter((_, i) => i !== index);
+      onUpdateSet({ ...set, words: updatedWords });
+    }
   };
 
   const addNewWord = () => {
@@ -257,11 +343,25 @@ const SetViewer = ({ set, onBack, onUpdateSet, onDeleteSet, viewMode, onViewMode
 
   const saveEdit = () => {
     if (editingCard === 'setName' && editingField === 'name') {
-      // Update set name
-      const updatedSet = { ...set, name: editingValue };
-      onUpdateSet(updatedSet);
+      // Update set name only if changed
+      if (editingValue !== set.name) {
+        const updatedSet = { ...set, name: editingValue };
+        onUpdateSet(updatedSet);
+      }
     } else if (editingCard !== null && editingField) {
-      updateWordField(editingCard, editingField, editingValue);
+      // Get the current word value
+      const word = set.words[editingCard];
+      const wordObj = typeof word === 'string' ? { word } : word;
+      const currentValue = wordObj[editingField];
+      
+      // Normalize values: treat undefined, null, and empty string as equivalent
+      const normalizedCurrent = currentValue || '';
+      const normalizedEditing = editingValue || '';
+      
+      // Only update if value actually changed
+      if (normalizedEditing !== normalizedCurrent) {
+        updateWordField(editingCard, editingField, editingValue);
+      }
     }
     
     setEditingCard(null);
@@ -442,7 +542,33 @@ const SetViewer = ({ set, onBack, onUpdateSet, onDeleteSet, viewMode, onViewMode
           </div>
 
           {/* Image */}
-          {wordObj.image ? (
+          {isEditing && editingCard === originalIndex && editingField === 'image' ? (
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-gray-600">Image URL:</label>
+              <input
+                type="text"
+                value={editingValue}
+                onChange={(e) => setEditingValue(e.target.value)}
+                className="w-full px-3 py-2 text-sm border-2 border-blue-500 rounded-lg focus:outline-none focus:border-blue-600"
+                onBlur={saveEdit}
+                onKeyPress={(e) => e.key === 'Enter' && saveEdit()}
+                autoFocus
+                placeholder="Enter image URL (e.g., https://example.com/image.jpg)"
+              />
+              {editingValue && (
+                <div className="w-full h-32 rounded-lg overflow-hidden">
+                  <img 
+                    src={editingValue} 
+                    alt="Preview"
+                    className="w-full h-full object-cover"
+                    onError={(e) => {
+                      e.target.src = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="100" height="100"%3E%3Ctext x="50%25" y="50%25" font-size="14" text-anchor="middle" fill="%23999"%3EInvalid URL%3C/text%3E%3C/svg%3E';
+                    }}
+                  />
+                </div>
+              )}
+            </div>
+          ) : wordObj.image ? (
             <div className="w-full h-32 sm:h-40 rounded-lg overflow-hidden relative group">
               <img 
                 src={wordObj.image} 
@@ -461,7 +587,7 @@ const SetViewer = ({ set, onBack, onUpdateSet, onDeleteSet, viewMode, onViewMode
           ) : (
             <div 
               className="w-full h-32 sm:h-40 rounded-lg border-2 border-dashed border-gray-300 hover:border-blue-400 cursor-pointer transition-all duration-200 flex items-center justify-center group"
-              onClick={() => startEdit(originalIndex, 'image', wordObj.image)}
+              onClick={() => startEdit(originalIndex, 'image', '')}
             >
               <div className="text-center">
                 <div className="flex items-center justify-center space-x-2">
@@ -489,7 +615,7 @@ const SetViewer = ({ set, onBack, onUpdateSet, onDeleteSet, viewMode, onViewMode
                   )}
                 </div>
                 <p className="text-sm text-gray-500 group-hover:text-blue-600 transition-colors mt-2">
-                  Click to add image
+                  Click to add image URL
                   {isNewCard && aiOptions.image && (
                     <span className="block text-xs text-purple-600 mt-1">
                       AI will generate
@@ -501,59 +627,83 @@ const SetViewer = ({ set, onBack, onUpdateSet, onDeleteSet, viewMode, onViewMode
           )}
 
           {/* Example Sentence */}
-          {wordObj.sentence || (isEditing && editingField === 'sentence') || isNewCard ? (
-            <div className="space-y-1">
-              <div className="flex items-center justify-between">
-                {isEditing && editingField === 'sentence' ? (
-                  <input
-                    type="text"
-                    value={editingValue}
-                    onChange={(e) => setEditingValue(e.target.value)}
-                    className="text-sm text-gray-700 italic bg-transparent border-b-2 border-blue-500 focus:outline-none focus:border-blue-600 flex-1"
-                    onBlur={saveEdit}
-                    onKeyPress={(e) => e.key === 'Enter' && saveEdit()}
-                    autoFocus
-                    placeholder="Enter example sentence..."
-                  />
-                ) : wordObj.sentence ? (
-                  <span 
-                    className="text-sm text-gray-700 italic cursor-text hover:text-blue-600 transition-colors flex-1"
-                    onClick={() => startEdit(originalIndex, 'sentence', wordObj.sentence)}
-                    title="Click to edit"
-                  >
-                    "{wordObj.sentence}"
-                  </span>
-                ) : (
-                  <span 
-                    className="text-sm text-gray-400 italic cursor-pointer hover:text-blue-600 transition-colors flex-1"
-                    onClick={() => startEdit(originalIndex, 'sentence', wordObj.sentence)}
-                    title="Click to add"
-                  >
-                    Click to add example sentence
-                  </span>
-                )}
-                
-                {/* Listen Button for Sentence */}
-                {wordObj.sentence && (
-                  <button
-                    onClick={() => playAudio(wordObj.sentence)}
-                    className="p-1 text-gray-500 hover:bg-gray-50 rounded transition-colors ml-2"
-                    title="Listen to sentence"
-                  >
-                    <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M9.383 3.076A1 1 0 0110 4v12a1 1 0 01-1.617.793L4.646 14H2a1 1 0 01-1-1V7a1 1 0 011-1h2.646l3.737-2.793a1 1 0 011.617.793zM14.657 2.929a1 1 0 011.414 0A9.972 9.972 0 0119 10a9.972 9.972 0 01-2.929 7.071 1 1 0 01-1.414-1.414A7.971 7.971 0 0017 10c0-2.21-.894-4.208-2.343-5.657a1 1 0 010-1.414z" clipRule="evenodd" />
-                    </svg>
-                  </button>
-                )}
-              </div>
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              {isEditing && editingField === 'sentence' ? (
+                <input
+                  type="text"
+                  value={editingValue}
+                  onChange={(e) => setEditingValue(e.target.value)}
+                  className="text-sm text-gray-700 italic bg-transparent border-b-2 border-blue-500 focus:outline-none focus:border-blue-600 flex-1"
+                  onBlur={saveEdit}
+                  onKeyPress={(e) => e.key === 'Enter' && saveEdit()}
+                  autoFocus
+                  placeholder="Enter example sentence..."
+                />
+              ) : wordObj.sentence ? (
+                <span 
+                  className="text-sm text-gray-700 italic cursor-text hover:text-blue-600 transition-colors flex-1"
+                  onClick={() => startEdit(originalIndex, 'sentence', wordObj.sentence)}
+                  title="Click to edit"
+                >
+                  "{wordObj.sentence}"
+                </span>
+              ) : (
+                <span 
+                  className="text-sm text-gray-400 italic cursor-pointer hover:text-blue-600 transition-colors flex-1"
+                  onClick={() => startEdit(originalIndex, 'sentence', '')}
+                  title="Click to add"
+                >
+                  Click to add example sentence
+                </span>
+              )}
               
-              {wordObj.sentenceTranslation && (
-                <div className="text-xs text-gray-500">
+              {/* Listen Button for Sentence */}
+              {wordObj.sentence && (
+                <button
+                  onClick={() => playAudio(wordObj.sentence)}
+                  className="p-1 text-gray-500 hover:bg-gray-50 rounded transition-colors ml-2"
+                  title="Listen to sentence"
+                >
+                  <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M9.383 3.076A1 1 0 0110 4v12a1 1 0 01-1.617.793L4.646 14H2a1 1 0 01-1-1V7a1 1 0 011-1h2.646l3.737-2.793a1 1 0 011.617.793zM14.657 2.929a1 1 0 011.414 0A9.972 9.972 0 0119 10a9.972 9.972 0 01-2.929 7.071 1 1 0 01-1.414-1.414A7.971 7.971 0 0017 10c0-2.21-.894-4.208-2.343-5.657a1 1 0 010-1.414z" clipRule="evenodd" />
+                  </svg>
+                </button>
+              )}
+            </div>
+            
+            {/* Sentence Translation - Always visible */}
+            <div className="mt-1">
+              {isEditing && editingField === 'sentenceTranslation' ? (
+                <input
+                  type="text"
+                  value={editingValue}
+                  onChange={(e) => setEditingValue(e.target.value)}
+                  className="text-xs text-gray-600 bg-transparent border-b-2 border-blue-500 focus:outline-none focus:border-blue-600 w-full"
+                  onBlur={saveEdit}
+                  onKeyPress={(e) => e.key === 'Enter' && saveEdit()}
+                  autoFocus
+                  placeholder="Enter sentence translation..."
+                />
+              ) : wordObj.sentenceTranslation ? (
+                <div 
+                  className="text-xs text-gray-500 cursor-text hover:text-blue-600 transition-colors"
+                  onClick={() => startEdit(originalIndex, 'sentenceTranslation', wordObj.sentenceTranslation)}
+                  title="Click to edit translation"
+                >
                   {wordObj.sentenceTranslation}
+                </div>
+              ) : (
+                <div 
+                  className="text-xs text-gray-400 cursor-pointer hover:text-blue-600 transition-colors italic"
+                  onClick={() => startEdit(originalIndex, 'sentenceTranslation', '')}
+                  title="Click to add translation"
+                >
+                  Click to add sentence translation
                 </div>
               )}
             </div>
-          ) : null}
+          </div>
 
           {/* Tags */}
           {wordObj.tags && wordObj.tags.length > 0 && (

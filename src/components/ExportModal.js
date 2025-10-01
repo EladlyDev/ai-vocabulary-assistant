@@ -71,7 +71,8 @@ const ExportModal = ({ isOpen, onClose, set, onExport }) => {
   };
 
   const handleExport = () => {
-    const data = set.words.map(word => ({
+    const words = set.words || [];
+    const data = words.map(word => ({
       word: word.word,
       ...(includeTranslations && { translation: word.translation }),
       ...(includePronunciation && { pronunciation: word.pronunciation }),
@@ -151,7 +152,7 @@ const ExportModal = ({ isOpen, onClose, set, onExport }) => {
       >
         <div className="bg-gradient-to-r from-blue-600 to-purple-600 text-white p-6 rounded-t-xl flex-shrink-0">
           <h2 className="text-xl font-bold">Export Vocabulary Set</h2>
-          <p className="text-blue-100 mt-1">"{set.name}" - {set.words.length} words</p>
+          <p className="text-blue-100 mt-1">"{set.name}" - {(set.words || []).length} words</p>
         </div>
 
         <div className="flex-1 overflow-y-auto custom-scrollbar" style={{

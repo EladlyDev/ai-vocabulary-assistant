@@ -1,389 +1,397 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import Dashboard from './components/Dashboard';
 import SetEditor from './components/SetEditor';
 import SetViewer from './components/SetViewer';
+import {
+  useGroups,
+  useCreateGroup,
+  useUpdateGroup,
+  useDeleteGroup,
+  useSets,
+  useCreateSet,
+  useUpdateSet,
+  useDeleteSet,
+  useWords,
+  useCreateWord,
+  useUpdateWord,
+  useDeleteWord,
+} from './hooks/useDatabase';
 
 function App() {
-  // Enhanced mock data with groups structure
-  const [groups, setGroups] = useState([
-    {
-      id: 1,
-      name: "Arabic Learning",
-      color: "blue",
-      sets: [
-        { 
-          id: 1, 
-          name: 'English→Arabic Essential Words', 
-          words: [
-            {
-              word: 'house',
-              translation: 'بيت',
-              sentence: 'I live in a beautiful house with my family.',
-              sentenceTranslation: 'أعيش في بيت جميل مع عائلتي.',
-              image: 'https://images.unsplash.com/photo-1564013799919-ab600027ffc6?w=400&h=300&fit=crop',
-              pronunciation: '/haʊs/',
-              tags: ['noun', 'home', 'family']
-            },
-            {
-              word: 'water',
-              translation: 'ماء',
-              sentence: 'Please drink more water to stay healthy.',
-              sentenceTranslation: 'من فضلك اشرب المزيد من الماء لتبقى بصحة جيدة.',
-              image: 'https://images.unsplash.com/photo-1548839140-29a749e1cf4d?w=400&h=300&fit=crop',
-              pronunciation: '/ˈwɔːtər/',
-              tags: ['noun', 'drink', 'health']
-            },
-            {
-              word: 'book',
-              translation: 'كتاب',
-              sentence: 'She reads a new book every week.',
-              sentenceTranslation: 'تقرأ كتاباً جديداً كل أسبوع.',
-              image: 'https://images.unsplash.com/photo-1481627834876-b7833e8f5570?w=400&h=300&fit=crop',
-              pronunciation: '/bʊk/',
-              tags: ['noun', 'education', 'reading']
-            },
-            {
-              word: 'food',
-              translation: 'طعام',
-              sentence: 'The restaurant serves delicious Middle Eastern food.',
-              sentenceTranslation: 'يقدم المطعم طعاماً شرق أوسطياً لذيذاً.',
-              image: 'https://images.unsplash.com/photo-1567620905732-2d1ec7ab7445?w=400&h=300&fit=crop',
-              pronunciation: '/fuːd/',
-              tags: ['noun', 'eating', 'cuisine']
-            },
-            {
-              word: 'friend',
-              translation: 'صديق',
-              sentence: 'My best friend always supports me.',
-              sentenceTranslation: 'أفضل صديق لي يدعمني دائماً.',
-              image: 'https://images.unsplash.com/photo-1491438590914-bc09fcaaf77a?w=400&h=300&fit=crop',
-              pronunciation: '/frend/',
-              tags: ['noun', 'relationship', 'social']
-            },
-            {
-              word: 'learn',
-              translation: 'يتعلم',
-              sentence: 'Students learn Arabic at the university.',
-              sentenceTranslation: 'يتعلم الطلاب اللغة العربية في الجامعة.',
-              image: 'https://images.unsplash.com/photo-1434030216411-0b793f4b4173?w=400&h=300&fit=crop',
-              pronunciation: '/lɜːrn/',
-              tags: ['verb', 'education', 'studying']
-            }
-          ]
-        },
-        { 
-          id: 4, 
-          name: 'English→Arabic Verbs', 
-          words: [
-            {
-              word: 'study',
-              translation: 'يدرس',
-              sentence: 'Ahmad studies Arabic literature at the university.',
-              sentenceTranslation: 'يدرس أحمد الأدب العربي في الجامعة.',
-              image: 'https://images.unsplash.com/photo-1434030216411-0b793f4b4173?w=400&h=300&fit=crop',
-              pronunciation: '/ˈstʌdi/',
-              tags: ['verb', 'education', 'learning']
-            },
-            {
-              word: 'travel',
-              translation: 'يسافر',
-              sentence: 'They travel to Egypt every summer.',
-              sentenceTranslation: 'يسافرون إلى مصر كل صيف.',
-              image: 'https://images.unsplash.com/photo-1488646953014-85cb44e25828?w=400&h=300&fit=crop',
-              pronunciation: '/ˈtrævəl/',
-              tags: ['verb', 'journey', 'vacation']
-            },
-            {
-              word: 'cook',
-              translation: 'يطبخ',
-              sentence: 'My mother cooks traditional Arabic dishes.',
-              sentenceTranslation: 'تطبخ أمي الأطباق العربية التقليدية.',
-              image: 'https://images.unsplash.com/photo-1556909114-f6e7ad7d3136?w=400&h=300&fit=crop',
-              pronunciation: '/kʊk/',
-              tags: ['verb', 'food', 'kitchen']
-            },
-            {
-              word: 'write',
-              translation: 'يكتب',
-              sentence: 'The journalist writes articles about Middle Eastern culture.',
-              sentenceTranslation: 'يكتب الصحفي مقالات عن الثقافة الشرق أوسطية.',
-              image: 'https://images.unsplash.com/photo-1455390582262-044cdead277a?w=400&h=300&fit=crop',
-              pronunciation: '/raɪt/',
-              tags: ['verb', 'communication', 'journalism']
-            },
-            {
-              word: 'help',
-              translation: 'يساعد',
-              sentence: 'Good friends always help each other.',
-              sentenceTranslation: 'الأصدقاء الجيدون يساعدون بعضهم البعض دائماً.',
-              image: 'https://images.unsplash.com/photo-1559027615-cd4628902d4a?w=400&h=300&fit=crop',
-              pronunciation: '/help/',
-              tags: ['verb', 'assistance', 'social']
-            }
-          ]
-        },
-        { 
-          id: 3, 
-          name: 'Arabic Business Vocabulary', 
-          words: [
-            {
-              word: 'عمل',
-              translation: 'work / business',
-              sentence: 'العمل في هذه الشركة ممتع ومفيد.',
-              sentenceTranslation: 'Working at this company is enjoyable and beneficial.',
-              image: 'https://images.unsplash.com/photo-1486312338219-ce68d2c6f44d?w=400&h=300&fit=crop',
-              pronunciation: '/ʕamal/',
-              tags: ['noun', 'business', 'career']
-            },
-            {
-              word: 'اجتماع',
-              translation: 'meeting',
-              sentence: 'لدينا اجتماع مهم غداً في الصباح.',
-              sentenceTranslation: 'We have an important meeting tomorrow morning.',
-              image: 'https://images.unsplash.com/photo-1556761175-b413da4baf72?w=400&h=300&fit=crop',
-              pronunciation: '/ɪdʒtɪmaːʕ/',
-              tags: ['noun', 'business', 'communication']
-            },
-            {
-              word: 'مشروع',
-              translation: 'project',
-              sentence: 'هذا المشروع سيغير مستقبل الشركة.',
-              sentenceTranslation: 'This project will change the future of the company.',
-              image: 'https://images.unsplash.com/photo-1460925895917-afdab827c52f?w=400&h=300&fit=crop',
-              pronunciation: '/maʃruːʕ/',
-              tags: ['noun', 'business', 'planning']
-            },
-            {
-              word: 'عميل',
-              translation: 'client / customer',
-              sentence: 'رضا العميل هو أولويتنا الأولى.',
-              sentenceTranslation: 'Customer satisfaction is our top priority.',
-              image: 'https://images.unsplash.com/photo-1559136555-9303baea8ebd?w=400&h=300&fit=crop',
-              pronunciation: '/ʕamiːl/',
-              tags: ['noun', 'business', 'customer service']
-            }
-          ]
-        }
-      ]
-    },
-    {
-      id: 2,
-      name: "European Languages",
-      color: "purple",
-      sets: [
-        { 
-          id: 2, 
-          name: 'German→Arabic Daily Life', 
-          words: [
-            {
-              word: 'das Haus',
-              translation: 'البيت',
-              sentence: 'Unser Haus ist sehr gemütlich und warm.',
-              sentenceTranslation: 'بيتنا مريح ودافئ جداً.',
-              image: 'https://images.unsplash.com/photo-1570129477492-45c003edd2be?w=400&h=300&fit=crop',
-              pronunciation: '/das haʊs/',
-              tags: ['noun', 'home', 'architecture']
-            },
-            {
-              word: 'die Familie',
-              translation: 'العائلة',
-              sentence: 'Meine Familie kommt aus Deutschland.',
-              sentenceTranslation: 'عائلتي من ألمانيا.',
-              image: 'https://images.unsplash.com/photo-1511895426328-dc8714191300?w=400&h=300&fit=crop',
-              pronunciation: '/diː faˈmiːliə/',
-              tags: ['noun', 'family', 'relationship']
-            },
-            {
-              word: 'arbeiten',
-              translation: 'يعمل',
-              sentence: 'Ich arbeite jeden Tag von neun bis fünf.',
-              sentenceTranslation: 'أعمل كل يوم من التاسعة إلى الخامسة.',
-              image: 'https://images.unsplash.com/photo-1560472354-b33ff0c44a43?w=400&h=300&fit=crop',
-              pronunciation: '/ˈaʁbaɪtən/',
-              tags: ['verb', 'work', 'daily']
-            },
-            {
-              word: 'das Brot',
-              translation: 'الخبز',
-              sentence: 'Deutsches Brot ist sehr lecker und gesund.',
-              sentenceTranslation: 'الخبز الألماني لذيذ جداً وصحي.',
-              image: 'https://images.unsplash.com/photo-1509440159596-0249088772ff?w=400&h=300&fit=crop',
-              pronunciation: '/das broːt/',
-              tags: ['noun', 'food', 'bakery']
-            },
-            {
-              word: 'sprechen',
-              translation: 'يتحدث',
-              sentence: 'Wir sprechen Deutsch und Arabisch zu Hause.',
-              sentenceTranslation: 'نتحدث الألمانية والعربية في البيت.',
-              image: 'https://images.unsplash.com/photo-1517486808906-6ca8b3f04846?w=400&h=300&fit=crop',
-              pronunciation: '/ˈʃprɛçən/',
-              tags: ['verb', 'communication', 'language']
-            },
-            {
-              word: 'die Zeit',
-              translation: 'الوقت',
-              sentence: 'Haben Sie Zeit für einen Kaffee?',
-              sentenceTranslation: 'هل لديك وقت لشرب القهوة؟',
-              image: 'https://images.unsplash.com/photo-1501139083538-0139583c060f?w=400&h=300&fit=crop',
-              pronunciation: '/diː tsaɪt/',
-              tags: ['noun', 'time', 'abstract']
-            }
-          ]
-        }
-      ]
-    }
-  ]);
+  const queryClient = useQueryClient();
+  
+  // Fetch data from database
+  const { data: groupsData = [], isLoading: groupsLoading, error: groupsError } = useGroups();
+  const { data: setsData = [], isLoading: setsLoading, error: setsError } = useSets();
+
+  // Mutations
+  const createGroupMutation = useCreateGroup();
+  const updateGroupMutation = useUpdateGroup();
+  const deleteGroupMutation = useDeleteGroup();
+  const createSetMutation = useCreateSet();
+  const updateSetMutation = useUpdateSet();
+  const deleteSetMutation = useDeleteSet();
+  const createWordMutation = useCreateWord();
+  const updateWordMutation = useUpdateWord();
+  const deleteWordMutation = useDeleteWord();
+
+  // Combine groups with their sets
+  const groups = useMemo(() => {
+    return groupsData.map(group => ({
+      ...group,
+      sets: setsData.filter(set => set.group_id === group.id)
+    }));
+  }, [groupsData, setsData]);
 
   // Flatten sets for backward compatibility with existing code
-  const mockSets = groups.flatMap(group => group.sets.map(set => ({ ...set, groupId: group.id, groupName: group.name })));
+  const mockSets = useMemo(() => {
+    return groups.flatMap(group => 
+      group.sets.map(set => ({ 
+        ...set, 
+        groupId: group.id, 
+        groupName: group.name,
+        words: set.words || [], // Ensure words array exists
+        // Use word_count from database if available, fallback to words array length
+        wordCount: set.word_count || (set.words?.length || 0)
+      }))
+    );
+  }, [groups]);
 
   const [currentView, setCurrentView] = useState({ name: 'dashboard' });
   const [activeSet, setActiveSet] = useState(null);
-  const [viewMode, setViewMode] = useState(localStorage.getItem('viewMode') || 'list'); // 'list' or 'table'
+  const [viewMode, setViewMode] = useState(localStorage.getItem('viewMode') || 'list');
   const [searchTerm, setSearchTerm] = useState('');
+
+  // Loading and error states
+  const isLoading = groupsLoading || setsLoading;
+  const error = groupsError || setsError;
 
   const handleCreateNewSet = () => {
     setActiveSet({ name: 'New Set', words: [] });
     setCurrentView({ name: 'editor' });
   };
 
-  const handleOpenSet = (setId) => {
+  const handleOpenSet = async (setId) => {
+    // Don't try to open sets with temporary IDs
+    if (setId && setId.toString().startsWith('temp-')) {
+      console.warn('Cannot open set with temporary ID. Please wait for set to be created.');
+      return;
+    }
+    
     const selectedSet = mockSets.find(set => set.id === setId);
     if (selectedSet) {
-      setActiveSet(selectedSet);
-      setCurrentView({ name: 'viewer' });
+      // Fetch words from database
+      try {
+        const { fetchWordsBySet } = await import('./services/words');
+        const wordsData = await fetchWordsBySet(setId);
+        
+        // Ensure set has a words array with fetched data
+        setActiveSet({
+          ...selectedSet,
+          words: wordsData || []
+        });
+        setCurrentView({ name: 'viewer' });
+      } catch (err) {
+        console.error('Failed to fetch words:', err);
+        // Still open the set with empty words array
+        setActiveSet({
+          ...selectedSet,
+          words: []
+        });
+        setCurrentView({ name: 'viewer' });
+      }
     }
   };
 
   const handleDeleteSet = (setId) => {
-    setGroups(prevGroups => 
-      prevGroups.map(group => ({
-        ...group,
-        sets: group.sets.filter(set => set.id !== setId)
-      }))
+    // Use mutate for instant UI updates
+    deleteSetMutation.mutate(
+      setId,
+      {
+        onError: (err) => {
+          console.error('Failed to delete set:', err);
+          alert('Failed to delete set. Please try again.');
+        }
+      }
     );
   };
 
   const handleUpdateSet = (updatedSet) => {
     setActiveSet(updatedSet);
     
-    // Update in groups if it exists (has an ID)
+    // Update in database if it exists (has an ID)
     if (updatedSet.id) {
-      setGroups(prevGroups => 
-        prevGroups.map(group => ({
-          ...group,
-          sets: group.sets.map(set => 
-            set.id === updatedSet.id ? updatedSet : set
-          )
-        }))
-      );
+      updateSetMutation.mutate({
+        setId: updatedSet.id,
+        updates: {
+          name: updatedSet.name,
+          group_id: updatedSet.group_id
+        }
+      });
     }
   };
 
-  const handleSaveNewSet = (newSet, targetGroupId = null) => {
-    if (newSet.name.trim() && newSet.words.length > 0) {
-      const setWithId = {
-        ...newSet,
-        id: Date.now() // Simple ID generation
-      };
-      
-      setGroups(prevGroups => {
-        // If no groups exist, create a default group
-        if (prevGroups.length === 0) {
-          return [{
-            id: Date.now(),
+  const handleUpdateWord = (wordId, updates, setId) => {
+    // Use mutate (non-blocking) for instant UI updates via optimistic update
+    updateWordMutation.mutate(
+      { wordId, updates, setId },
+      {
+        onSuccess: (updatedWord) => {
+          // Update activeSet with the updated word from response
+          if (activeSet && activeSet.id === setId) {
+            setActiveSet(prev => ({
+              ...prev,
+              words: prev.words.map(w => w.id === wordId ? { ...w, ...updatedWord } : w)
+            }));
+          }
+        },
+        onError: (err) => {
+          console.error('Failed to update word:', err);
+          alert('Failed to update word. Please try again.');
+        }
+      }
+    );
+  };
+
+  const handleCreateWord = async (wordData) => {
+    try {
+      const newWord = await createWordMutation.mutateAsync(wordData);
+      // React Query's optimistic update will handle the UI
+      // Just update activeSet with the new word from the response
+      if (activeSet && activeSet.id === wordData.set_id) {
+        setActiveSet(prev => ({
+          ...prev,
+          words: [...(prev.words || []), newWord]
+        }));
+      }
+      return newWord;
+    } catch (err) {
+      console.error('Failed to create word:', err);
+      alert('Failed to create word. Please try again.');
+      throw err;
+    }
+  };
+
+  const handleDeleteWord = (wordId, setId) => {
+    // Use mutate (non-blocking) for instant UI updates
+    deleteWordMutation.mutate(
+      { wordId, setId },
+      {
+        onSuccess: () => {
+          // Optimistic update already handled, just update local state
+          setActiveSet(prev => ({
+            ...prev,
+            words: prev.words.filter(w => w.id !== wordId)
+          }));
+        },
+        onError: (err) => {
+          console.error('Failed to delete word:', err);
+          alert('Failed to delete word. Please try again.');
+        }
+      }
+    );
+  };
+
+  const handleSaveNewSet = async (newSet, targetGroupId = null) => {
+    if (newSet.name.trim()) {
+      try {
+        console.log('Starting set creation...', newSet);
+        
+        // Determine which group to add to
+        let groupId = targetGroupId;
+        
+        // If no target group and no groups exist, create a default group first
+        if (!groupId && groups.length === 0) {
+          console.log('Creating default group...');
+          const newGroup = await createGroupMutation.mutateAsync({
             name: "My Vocabulary Sets",
-            color: "blue",
-            sets: [setWithId]
-          }];
+            color: "blue"
+          });
+          groupId = newGroup.id;
+          console.log('Default group created:', groupId);
         }
         
-        // If target group specified, add to that group
-        if (targetGroupId) {
-          return prevGroups.map(group => 
-            group.id === targetGroupId 
-              ? { ...group, sets: [...group.sets, setWithId] }
-              : group
-          );
+        // If still no group, use first group
+        if (!groupId) {
+          groupId = groups[0].id;
+          console.log('Using first group:', groupId);
         }
-        
-        // Default: add to first group
-        return prevGroups.map((group, index) => 
-          index === 0 ? { ...group, sets: [...group.sets, setWithId] } : group
-        );
-      });
-      
-      setCurrentView({ name: 'dashboard' });
-      setActiveSet(null);
+
+        // Create the set in database
+        console.log('Creating set in database...');
+        const createdSet = await createSetMutation.mutateAsync({
+          group_id: groupId,
+          name: newSet.name
+        });
+        console.log('Set created:', createdSet);
+
+        // Create words if any - use Promise.all for parallel creation
+        if (newSet.words && newSet.words.length > 0) {
+          console.log('Creating words:', newSet.words.length);
+          // Parse all words first
+          const wordPromises = newSet.words
+            .filter(wordLine => wordLine.trim())
+            .map(wordLine => {
+              // Parse the word line - expecting format: "word|translation" or just "word"
+              const parts = wordLine.split('|').map(p => p.trim());
+              const wordText = parts[0];
+              const translation = parts[1] || '';
+              
+              if (wordText) {
+                return createWordMutation.mutateAsync({
+                  set_id: createdSet.id,
+                  word: wordText,
+                  translation: translation,
+                  sentence: null,
+                  sentence_translation: null,
+                  example: null,
+                  image_url: null,
+                  pronunciation: null,
+                  synonyms: [],
+                  antonyms: [],
+                  tags: []
+                });
+              }
+              return null;
+            })
+            .filter(Boolean);
+
+          // Create all words in parallel for better performance
+          await Promise.all(wordPromises);
+          console.log('Words created successfully');
+        }
+
+        console.log('Navigating to dashboard...');
+        setCurrentView({ name: 'dashboard' });
+        setActiveSet(null);
+      } catch (err) {
+        console.error('Failed to save set:', err);
+        alert('Failed to save set. Please try again.');
+      }
     }
   };
 
   const handleCreateGroup = (groupData) => {
-    const newGroup = {
-      id: Date.now(),
-      name: groupData.name || "New Group",
-      color: groupData.color || "blue",
-      sets: []
-    };
-    setGroups(prevGroups => [...prevGroups, newGroup]);
+    // Use mutate (non-blocking) for instant UI updates
+    createGroupMutation.mutate(
+      {
+        name: groupData.name || "New Group",
+        color: groupData.color || "blue"
+      },
+      {
+        onError: (err) => {
+          console.error('Failed to create group:', err);
+          alert('Failed to create group. Please try again.');
+        }
+      }
+    );
   };
 
-  const handleUpdateGroup = (groupId, updatedData) => {
+  const handleUpdateGroup = async (groupId, updatedData) => {
     // Special case for reordering groups
     if (groupId === 'reorder' && Array.isArray(updatedData)) {
-      setGroups(updatedData);
+      try {
+        // Import the updateGroupsOrder function
+        const { updateGroupsOrder } = await import('./services/groups');
+        
+        // Update all groups with their new display_order
+        await updateGroupsOrder(updatedData);
+        
+        // Invalidate and refetch groups immediately
+        await queryClient.invalidateQueries({ queryKey: ['groups'] });
+        
+        console.log('Groups reordered successfully!');
+      } catch (err) {
+        console.error('Failed to reorder groups:', err);
+        alert('Failed to save group order. Please try again.');
+      }
       return;
     }
     
-    setGroups(prevGroups => 
-      prevGroups.map(group => 
-        group.id === groupId ? { ...group, ...updatedData } : group
-      )
+    // Regular group update - use mutate for instant UI
+    updateGroupMutation.mutate(
+      {
+        groupId,
+        updates: updatedData
+      },
+      {
+        onError: (err) => {
+          console.error('Failed to update group:', err);
+          alert('Failed to update group. Please try again.');
+        }
+      }
     );
   };
 
   const handleDeleteGroup = (groupId) => {
-    setGroups(prevGroups => prevGroups.filter(group => group.id !== groupId));
+    // Use mutate for instant UI updates
+    deleteGroupMutation.mutate(
+      groupId,
+      {
+        onError: (err) => {
+          console.error('Failed to delete group:', err);
+          alert('Failed to delete group. Please try again.');
+        }
+      }
+    );
   };
 
-  const handleMoveSetToGroup = (setId, targetGroupId) => {
-    setGroups(prevGroups => {
-      // Find the set and remove it from current group
-      let setToMove = null;
-      const groupsWithoutSet = prevGroups.map(group => ({
-        ...group,
-        sets: group.sets.filter(set => {
-          if (set.id === setId) {
-            setToMove = set;
-            return false;
-          }
-          return true;
-        })
-      }));
-
-      // Add the set to target group
-      if (setToMove) {
-        return groupsWithoutSet.map(group => 
-          group.id === targetGroupId 
-            ? { ...group, sets: [...group.sets, setToMove] }
-            : group
-        );
-      }
-      return groupsWithoutSet;
-    });
+  const handleMoveSetToGroup = async (setId, targetGroupId) => {
+    try {
+      await updateSetMutation.mutateAsync({
+        setId,
+        updates: { group_id: targetGroupId }
+      });
+    } catch (err) {
+      console.error('Failed to move set:', err);
+      alert('Failed to move set. Please try again.');
+    }
   };
 
   const handleShowDashboard = () => {
     setActiveSet(null);
     setCurrentView({ name: 'dashboard' });
-    setSearchTerm(''); // Clear search when going back to dashboard
+    setSearchTerm('');
   };
 
   const handleViewModeChange = (newMode) => {
     setViewMode(newMode);
-    localStorage.setItem('viewMode', newMode); // Remember user preference
+    localStorage.setItem('viewMode', newMode);
   };
+
+  // Show loading state
+  if (isLoading) {
+    return (
+      <div className="min-h-screen w-full bg-gradient-to-br from-gray-50 via-blue-50/30 to-purple-50/20 flex items-center justify-center">
+        <div className="text-center">
+          <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mb-4"></div>
+          <p className="text-gray-600">Loading your vocabulary sets...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show error state
+  if (error) {
+    return (
+      <div className="min-h-screen w-full bg-gradient-to-br from-gray-50 via-blue-50/30 to-purple-50/20 flex items-center justify-center">
+        <div className="text-center max-w-md mx-auto p-6">
+          <div className="text-red-600 text-5xl mb-4">⚠️</div>
+          <h2 className="text-2xl font-bold text-gray-800 mb-2">Failed to Load Data</h2>
+          <p className="text-gray-600 mb-4">
+            {error.message || 'An error occurred while loading your vocabulary sets.'}
+          </p>
+          <button
+            onClick={() => window.location.reload()}
+            className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen w-full bg-gradient-to-br from-gray-50 via-blue-50/30 to-purple-50/20">
@@ -398,6 +406,11 @@ function App() {
           onDeleteGroup={handleDeleteGroup}
           onDeleteSet={handleDeleteSet}
           onMoveSetToGroup={handleMoveSetToGroup}
+          isCreatingGroup={createGroupMutation.isPending}
+          isUpdatingGroup={updateGroupMutation.isPending}
+          isDeletingGroup={deleteGroupMutation.isPending}
+          isCreatingSet={createSetMutation.isPending}
+          isDeletingSet={deleteSetMutation.isPending}
         />
       )}
       {currentView.name === 'editor' && (
@@ -416,10 +429,15 @@ function App() {
           onBack={handleShowDashboard}
           onUpdateSet={handleUpdateSet}
           onDeleteSet={handleDeleteSet}
+          onCreateWord={handleCreateWord}
+          onUpdateWord={handleUpdateWord}
+          onDeleteWord={handleDeleteWord}
           viewMode={viewMode}
           onViewModeChange={handleViewModeChange}
           searchTerm={searchTerm}
           onSearchChange={setSearchTerm}
+          isUpdatingWord={updateWordMutation.isPending}
+          isDeletingWord={deleteWordMutation.isPending}
         />
       )}
     </div>
