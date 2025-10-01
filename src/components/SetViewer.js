@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import ExportModal from './ExportModal';
 import BackToTop from './BackToTop';
 
@@ -14,6 +14,9 @@ const SetViewer = ({ set, onBack, onUpdateSet, onDeleteSet, viewMode, onViewMode
   const [pendingAction, setPendingAction] = useState(null);
   const [isCreatingNewCard, setIsCreatingNewCard] = useState(false);
   const [aiGenerationOptions, setAiGenerationOptions] = useState({});
+  const newCardRef = useRef(null); // Reference to scroll to new card
+  const [notification, setNotification] = useState(null);
+  const [showNotification, setShowNotification] = useState(false);
 
   // Track original state for change detection
   useEffect(() => {
@@ -25,10 +28,30 @@ const SetViewer = ({ set, onBack, onUpdateSet, onDeleteSet, viewMode, onViewMode
   // Detect changes
   useEffect(() => {
     if (originalSet) {
-      const hasChanges = JSON.stringify(set) !== JSON.stringify(originalSet);
-      setHasUnsavedChanges(hasChanges);
+      // If we're creating a new card, check if it has any data
+      if (isCreatingNewCard && set.words.length > 0) {
+        const newCard = set.words[0];
+        const wordObj = typeof newCard === 'string' ? { word: newCard } : newCard;
+        
+        // Check if the new card has any meaningful data
+        const hasData = (wordObj.word && wordObj.word.trim() !== '') ||
+                       (wordObj.translation && wordObj.translation.trim() !== '') ||
+                       (wordObj.sentence && wordObj.sentence.trim() !== '') ||
+                       (wordObj.sentenceTranslation && wordObj.sentenceTranslation.trim() !== '') ||
+                       (wordObj.image && wordObj.image.trim() !== '') ||
+                       (wordObj.pronunciation && wordObj.pronunciation.trim() !== '') ||
+                       (wordObj.tags && wordObj.tags.length > 0);
+        
+        // Only enable save if the new card has data OR there are other changes
+        const otherChanges = JSON.stringify(set.words.slice(1)) !== JSON.stringify(originalSet.words);
+        setHasUnsavedChanges(hasData || otherChanges);
+      } else {
+        // Normal change detection
+        const hasChanges = JSON.stringify(set) !== JSON.stringify(originalSet);
+        setHasUnsavedChanges(hasChanges);
+      }
     }
-  }, [set, originalSet]);
+  }, [set, originalSet, isCreatingNewCard]);
 
   // Prevent navigation with unsaved changes
   useEffect(() => {
@@ -42,6 +65,15 @@ const SetViewer = ({ set, onBack, onUpdateSet, onDeleteSet, viewMode, onViewMode
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [hasUnsavedChanges]);
+
+  const showNotificationMessage = (message, type = 'warning') => {
+    setNotification({ message, type });
+    setShowNotification(true);
+    setTimeout(() => {
+      setShowNotification(false);
+      setTimeout(() => setNotification(null), 300);
+    }, 4000);
+  };
 
   const handleDeleteSet = () => {
     onDeleteSet(set.id);
@@ -71,24 +103,60 @@ const SetViewer = ({ set, onBack, onUpdateSet, onDeleteSet, viewMode, onViewMode
   };
 
   const handleSaveChanges = async () => {
-    // Check if any new cards have empty words - remove them
-    const validWords = set.words.filter(word => {
+    // Validate and categorize words
+    const wordsToRemove = [];
+    const wordsToWarn = [];
+    const validWords = [];
+    
+    set.words.forEach((word, index) => {
       const wordObj = typeof word === 'string' ? { word } : word;
-      return wordObj.word && wordObj.word.trim() !== '';
+      const hasWord = wordObj.word && wordObj.word.trim() !== '';
+      const hasOtherData = wordObj.translation || wordObj.sentence || wordObj.image || 
+                          (wordObj.tags && wordObj.tags.length > 0);
+      
+      if (!hasWord && !hasOtherData) {
+        // Empty card - remove silently
+        wordsToRemove.push(index);
+      } else if (!hasWord && hasOtherData) {
+        // Has data but no word - warn user
+        wordsToWarn.push(index);
+      } else {
+        // Valid word
+        validWords.push(word);
+      }
     });
     
-    if (validWords.length !== set.words.length) {
-      // Update the set to remove empty words
-      onUpdateSet({ ...set, words: validWords });
+    // If there are cards with data but no word, show warning
+    if (wordsToWarn.length > 0) {
+      showNotificationMessage(
+        `${wordsToWarn.length} card${wordsToWarn.length > 1 ? 's have' : ' has'} data but no word. Please add a word or the card${wordsToWarn.length > 1 ? 's' : ''} will be removed.`,
+        'warning'
+      );
+      return; // Don't save yet, let user fix the issue
+    }
+    
+    // Remove empty cards and update
+    const filteredWords = set.words.filter((word, index) => !wordsToRemove.includes(index) && !wordsToWarn.includes(index));
+    
+    // If we were creating a new card and it's being removed, reset the state
+    if (isCreatingNewCard && wordsToRemove.includes(0)) {
+      setIsCreatingNewCard(false);
+      setEditingCard(null);
+      setEditingField(null);
+      setEditingValue('');
+    }
+    
+    if (filteredWords.length !== set.words.length) {
+      onUpdateSet({ ...set, words: filteredWords });
     }
     
     // Save current changes
-    setOriginalSet(JSON.parse(JSON.stringify({ ...set, words: validWords })));
+    setOriginalSet(JSON.parse(JSON.stringify({ ...set, words: filteredWords })));
     setHasUnsavedChanges(false);
     setIsCreatingNewCard(false);
     
     // Generate AI content only for words that have AI generation requested
-    const wordsToEnrich = validWords.filter(word => {
+    const wordsToEnrich = filteredWords.filter(word => {
       const wordIndex = set.words.findIndex(w => w === word);
       const options = aiGenerationOptions[wordIndex] || {};
       
@@ -97,7 +165,7 @@ const SetViewer = ({ set, onBack, onUpdateSet, onDeleteSet, viewMode, onViewMode
     
     if (wordsToEnrich.length > 0) {
       console.log('Generating AI content for', wordsToEnrich.length, 'words...');
-      alert(`AI generation started for ${wordsToEnrich.length} words with requested features.`);
+      showNotificationMessage(`AI generation started for ${wordsToEnrich.length} word${wordsToEnrich.length > 1 ? 's' : ''}.`, 'success');
     }
     
     // Clear AI generation options
@@ -120,6 +188,14 @@ const SetViewer = ({ set, onBack, onUpdateSet, onDeleteSet, viewMode, onViewMode
   };
 
   const deleteWord = (index) => {
+    // If deleting a card that was being created, reset the creation state
+    if (isCreatingNewCard && index === 0) {
+      setIsCreatingNewCard(false);
+      setEditingCard(null);
+      setEditingField(null);
+      setEditingValue('');
+    }
+    
     const updatedWords = set.words.filter((_, i) => i !== index);
     onUpdateSet({ ...set, words: updatedWords });
   };
@@ -134,15 +210,36 @@ const SetViewer = ({ set, onBack, onUpdateSet, onDeleteSet, viewMode, onViewMode
       pronunciation: '',
       tags: []
     };
-    const updatedWords = [...set.words, newWord];
+    // Add new card at the BEGINNING of the array for better visibility
+    const updatedWords = [newWord, ...set.words];
     onUpdateSet({ ...set, words: updatedWords });
-    setEditingCard(updatedWords.length - 1);
+    // The new card is now at index 0
+    setEditingCard(0);
     setEditingField('word');
     setEditingValue('');
     setIsCreatingNewCard(true);
+    
+    // Smooth scroll to top with the same animation as BackToTop button
+    window.scrollTo({
+      top: 0,
+      behavior: 'smooth'
+    });
   };
 
   const toggleAiGeneration = (cardIndex, field) => {
+    // Check if the word field has content
+    const wordObj = typeof set.words[cardIndex] === 'string' 
+      ? { word: set.words[cardIndex] } 
+      : set.words[cardIndex];
+    
+    if (!wordObj.word || wordObj.word.trim() === '') {
+      showNotificationMessage(
+        'Please add a word first before generating AI content.',
+        'warning'
+      );
+      return;
+    }
+    
     setAiGenerationOptions(prev => ({
       ...prev,
       [cardIndex]: {
@@ -153,33 +250,18 @@ const SetViewer = ({ set, onBack, onUpdateSet, onDeleteSet, viewMode, onViewMode
   };
 
   const startEdit = (cardIndex, field, currentValue) => {
-    // If we were creating a new card and switching to edit something else
-    // without saving the word, remove the empty card
-    if (isCreatingNewCard && editingCard !== null && editingField === 'word' && 
-        (!editingValue || editingValue.trim() === '') && 
-        (cardIndex !== editingCard || field !== 'word')) {
-      
-      const updatedWords = set.words.filter((_, index) => index !== editingCard);
-      onUpdateSet({ ...set, words: updatedWords });
-      setIsCreatingNewCard(false);
-    }
-    
     setEditingCard(cardIndex);
     setEditingField(field);
     setEditingValue(currentValue || '');
   };
 
   const saveEdit = () => {
-    if (editingCard !== null && editingField) {
+    if (editingCard === 'setName' && editingField === 'name') {
+      // Update set name
+      const updatedSet = { ...set, name: editingValue };
+      onUpdateSet(updatedSet);
+    } else if (editingCard !== null && editingField) {
       updateWordField(editingCard, editingField, editingValue);
-    }
-    
-    // Check if we were creating a new card and the word field is empty
-    if (isCreatingNewCard && editingField === 'word' && (!editingValue || editingValue.trim() === '')) {
-      // Remove the empty card
-      const updatedWords = set.words.filter((_, index) => index !== editingCard);
-      onUpdateSet({ ...set, words: updatedWords });
-      setIsCreatingNewCard(false);
     }
     
     setEditingCard(null);
@@ -189,14 +271,6 @@ const SetViewer = ({ set, onBack, onUpdateSet, onDeleteSet, viewMode, onViewMode
 
   // eslint-disable-next-line no-unused-vars
   const cancelEdit = () => {
-    // Check if we were creating a new card and the word field is empty
-    if (isCreatingNewCard && editingField === 'word' && (!editingValue || editingValue.trim() === '')) {
-      // Remove the empty card
-      const updatedWords = set.words.filter((_, index) => index !== editingCard);
-      onUpdateSet({ ...set, words: updatedWords });
-      setIsCreatingNewCard(false);
-    }
-    
     setEditingCard(null);
     setEditingField(null);
     setEditingValue('');
@@ -240,11 +314,16 @@ const SetViewer = ({ set, onBack, onUpdateSet, onDeleteSet, viewMode, onViewMode
   const WordCard = ({ word, index, originalIndex }) => {
     const wordObj = typeof word === 'string' ? { word } : word;
     const isEditing = editingCard === originalIndex;
-    const isNewCard = isCreatingNewCard && originalIndex === set.words.length - 1;
+    const isNewCard = isCreatingNewCard && originalIndex === 0; // New card is now at index 0
     const aiOptions = aiGenerationOptions[originalIndex] || {};
 
     return (
-      <div className="bg-white/80 backdrop-blur-sm rounded-xl shadow-md border border-gray-200/50 p-4 sm:p-6 hover:shadow-lg transition-all duration-200">
+      <div 
+        ref={isNewCard ? newCardRef : null}
+        className={`bg-white/80 backdrop-blur-sm rounded-xl shadow-md border border-gray-200/50 p-4 sm:p-6 hover:shadow-lg transition-all duration-200 ${
+          isNewCard ? 'ring-2 ring-purple-400 ring-offset-2 animate-pulse-slow' : ''
+        }`}
+      >
         <div className="flex flex-col space-y-4">
           
           {/* Word and Translation */}
@@ -272,10 +351,11 @@ const SetViewer = ({ set, onBack, onUpdateSet, onDeleteSet, viewMode, onViewMode
                     />
                   ) : (
                     <h3 
-                      className={`text-xl font-bold cursor-pointer hover:text-blue-600 transition-colors w-full ${
+                      className={`text-xl font-bold cursor-text hover:text-blue-600 transition-colors w-full ${
                         !wordObj.word ? 'text-gray-400 italic' : 'text-gray-900'
                       }`}
                       onClick={() => startEdit(originalIndex, 'word', wordObj.word)}
+                      title="Click to edit"
                     >
                       {wordObj.word || 'Click to add word'}
                     </h3>
@@ -298,16 +378,6 @@ const SetViewer = ({ set, onBack, onUpdateSet, onDeleteSet, viewMode, onViewMode
 
               {/* Action Buttons - Fixed positioning */}
               <div className="flex items-center space-x-2 flex-shrink-0">
-                <button
-                  onClick={() => setEditingCard(editingCard === originalIndex ? null : originalIndex)}
-                  className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                  title="Edit word"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                  </svg>
-                </button>
-                
                 <button
                   onClick={() => deleteWord(originalIndex)}
                   className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
@@ -342,10 +412,11 @@ const SetViewer = ({ set, onBack, onUpdateSet, onDeleteSet, viewMode, onViewMode
                 />
               ) : (
                 <span 
-                  className={`text-lg cursor-pointer hover:text-blue-600 transition-colors flex-1 ${
+                  className={`text-lg cursor-text hover:text-blue-600 transition-colors flex-1 ${
                     !wordObj.translation ? 'text-gray-400 italic' : 'text-gray-600'
                   }`}
                   onClick={() => startEdit(originalIndex, 'translation', wordObj.translation)}
+                  title="Click to edit"
                 >
                   {wordObj.translation || 'Click to add translation'}
                 </span>
@@ -430,7 +501,7 @@ const SetViewer = ({ set, onBack, onUpdateSet, onDeleteSet, viewMode, onViewMode
           )}
 
           {/* Example Sentence */}
-          {wordObj.sentence || (isEditing && editingField === 'sentence') ? (
+          {wordObj.sentence || (isEditing && editingField === 'sentence') || isNewCard ? (
             <div className="space-y-1">
               <div className="flex items-center justify-between">
                 {isEditing && editingField === 'sentence' ? (
@@ -444,12 +515,21 @@ const SetViewer = ({ set, onBack, onUpdateSet, onDeleteSet, viewMode, onViewMode
                     autoFocus
                     placeholder="Enter example sentence..."
                   />
-                ) : (
+                ) : wordObj.sentence ? (
                   <span 
-                    className="text-sm text-gray-700 italic cursor-pointer hover:text-blue-600 transition-colors flex-1"
+                    className="text-sm text-gray-700 italic cursor-text hover:text-blue-600 transition-colors flex-1"
                     onClick={() => startEdit(originalIndex, 'sentence', wordObj.sentence)}
+                    title="Click to edit"
                   >
                     "{wordObj.sentence}"
+                  </span>
+                ) : (
+                  <span 
+                    className="text-sm text-gray-400 italic cursor-pointer hover:text-blue-600 transition-colors flex-1"
+                    onClick={() => startEdit(originalIndex, 'sentence', wordObj.sentence)}
+                    title="Click to add"
+                  >
+                    Click to add example sentence
                   </span>
                 )}
                 
@@ -473,33 +553,7 @@ const SetViewer = ({ set, onBack, onUpdateSet, onDeleteSet, viewMode, onViewMode
                 </div>
               )}
             </div>
-          ) : (
-            <div className="flex items-center space-x-2">
-              <div 
-                className="text-sm text-gray-400 italic cursor-pointer hover:text-blue-600 transition-colors py-2 border-2 border-dashed border-gray-200 hover:border-blue-300 rounded-lg text-center flex-1"
-                onClick={() => startEdit(originalIndex, 'sentence', wordObj.sentence)}
-              >
-                Click to add example sentence
-              </div>
-              
-              {/* AI Generation Toggle for Sentence */}
-              {isNewCard && (
-                <button
-                  onClick={() => toggleAiGeneration(originalIndex, 'sentence')}
-                  className={`p-1 rounded transition-colors ${
-                    aiOptions.sentence 
-                      ? 'bg-purple-100 text-purple-700 hover:bg-purple-200' 
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                  }`}
-                  title="Toggle AI generation for sentence"
-                >
-                  <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                    <path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v3h8v-3z" />
-                  </svg>
-                </button>
-              )}
-            </div>
-          )}
+          ) : null}
 
           {/* Tags */}
           {wordObj.tags && wordObj.tags.length > 0 && (
@@ -538,6 +592,8 @@ const SetViewer = ({ set, onBack, onUpdateSet, onDeleteSet, viewMode, onViewMode
               const originalIndex = set.words.findIndex(w => w === word);
               const wordObj = typeof word === 'string' ? { word } : word;
               const isEditing = editingCard === originalIndex;
+              const isNewCard = isCreatingNewCard && originalIndex === 0;
+              const aiOptions = aiGenerationOptions[originalIndex] || {};
               
               return (
                 <tr key={originalIndex} className="hover:bg-gray-50/50">
@@ -591,10 +647,11 @@ const SetViewer = ({ set, onBack, onUpdateSet, onDeleteSet, viewMode, onViewMode
                         />
                       ) : (
                         <span 
-                          className={`font-medium cursor-pointer hover:text-blue-600 transition-colors ${
+                          className={`font-medium cursor-text hover:text-blue-600 transition-colors ${
                             !wordObj.word ? 'text-gray-400 italic' : 'text-gray-900'
                           }`}
                           onClick={() => startEdit(originalIndex, 'word', wordObj.word)}
+                          title="Click to edit"
                         >
                           {wordObj.word || 'Click to add word'}
                         </span>
@@ -616,70 +673,109 @@ const SetViewer = ({ set, onBack, onUpdateSet, onDeleteSet, viewMode, onViewMode
                   
                   {/* Translation Column */}
                   <td className="px-4 py-4">
-                    {isEditing && editingField === 'translation' ? (
-                      <input
-                        type="text"
-                        value={editingValue}
-                        onChange={(e) => setEditingValue(e.target.value)}
-                        className="text-sm text-gray-600 bg-transparent border-b-2 border-blue-500 focus:outline-none focus:border-blue-600 w-full"
-                        onBlur={saveEdit}
-                        onKeyPress={(e) => e.key === 'Enter' && saveEdit()}
-                        autoFocus
-                        placeholder="Enter translation..."
-                      />
-                    ) : (
-                      <span 
-                        className={`text-sm cursor-pointer hover:text-blue-600 transition-colors ${
-                          !wordObj.translation ? 'text-gray-400 italic' : 'text-gray-600'
-                        }`}
-                        onClick={() => startEdit(originalIndex, 'translation', wordObj.translation)}
-                      >
-                        {wordObj.translation || 'Click to add translation'}
-                      </span>
-                    )}
+                    <div className="flex items-center space-x-2">
+                      {isEditing && editingField === 'translation' ? (
+                        <input
+                          type="text"
+                          value={editingValue}
+                          onChange={(e) => setEditingValue(e.target.value)}
+                          className="text-sm text-gray-600 bg-transparent border-b-2 border-blue-500 focus:outline-none focus:border-blue-600 w-full"
+                          onBlur={saveEdit}
+                          onKeyPress={(e) => e.key === 'Enter' && saveEdit()}
+                          autoFocus
+                          placeholder="Enter translation..."
+                        />
+                      ) : (
+                        <span 
+                          className={`text-sm cursor-text hover:text-blue-600 transition-colors flex-1 ${
+                            !wordObj.translation ? 'text-gray-400 italic' : 'text-gray-600'
+                          }`}
+                          onClick={() => startEdit(originalIndex, 'translation', wordObj.translation)}
+                          title="Click to edit"
+                        >
+                          {wordObj.translation || 'Click to add translation'}
+                        </span>
+                      )}
+                      
+                      {/* AI Generation Toggle for Translation */}
+                      {isNewCard && (
+                        <button
+                          onClick={() => toggleAiGeneration(originalIndex, 'translation')}
+                          className={`p-1 rounded transition-colors flex-shrink-0 ${
+                            aiOptions.translation 
+                              ? 'bg-purple-100 text-purple-700 hover:bg-purple-200' 
+                              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                          }`}
+                          title="Toggle AI generation for translation"
+                        >
+                          <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                            <path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v3h8v-3z" />
+                          </svg>
+                        </button>
+                      )}
+                    </div>
                   </td>
                   
                   {/* Example Column */}
                   <td className="px-4 py-4 max-w-xs">
-                    {wordObj.sentence ? (
-                      <div className="flex items-center space-x-1">
-                        {isEditing && editingField === 'sentence' ? (
-                          <input
-                            type="text"
-                            value={editingValue}
-                            onChange={(e) => setEditingValue(e.target.value)}
-                            className="text-sm text-gray-600 bg-transparent border-b-2 border-blue-500 focus:outline-none focus:border-blue-600 w-full"
-                            onBlur={saveEdit}
-                            onKeyPress={(e) => e.key === 'Enter' && saveEdit()}
-                            autoFocus
-                            placeholder="Enter example sentence..."
-                          />
-                        ) : (
+                    <div className="flex items-center space-x-2">
+                      {isEditing && editingField === 'sentence' ? (
+                        <input
+                          type="text"
+                          value={editingValue}
+                          onChange={(e) => setEditingValue(e.target.value)}
+                          className="text-sm text-gray-600 bg-transparent border-b-2 border-blue-500 focus:outline-none focus:border-blue-600 w-full"
+                          onBlur={saveEdit}
+                          onKeyPress={(e) => e.key === 'Enter' && saveEdit()}
+                          autoFocus
+                          placeholder="Enter example sentence..."
+                        />
+                      ) : wordObj.sentence ? (
+                        <div className="flex items-center space-x-1 flex-1">
                           <span 
-                            className="text-sm text-gray-600 cursor-pointer hover:text-blue-600 transition-colors truncate"
+                            className="text-sm text-gray-600 cursor-text hover:text-blue-600 transition-colors truncate"
                             onClick={() => startEdit(originalIndex, 'sentence', wordObj.sentence)}
+                            title="Click to edit"
                           >
                             "{wordObj.sentence}"
                           </span>
-                        )}
+                          <button
+                            onClick={() => playAudio(wordObj.sentence)}
+                            className="p-1 text-gray-500 hover:bg-gray-50 rounded transition-colors"
+                            title="Listen to sentence"
+                          >
+                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                              <path fillRule="evenodd" d="M9.383 3.076A1 1 0 0110 4v12a1 1 0 01-1.617.793L4.646 14H2a1 1 0 01-1-1V7a1 1 0 011-1h2.646l3.737-2.793a1 1 0 011.617.793z" clipRule="evenodd" />
+                            </svg>
+                          </button>
+                        </div>
+                      ) : (
+                        <span 
+                          className="text-sm text-gray-400 italic cursor-pointer hover:text-blue-600 transition-colors flex-1"
+                          onClick={() => startEdit(originalIndex, 'sentence', wordObj.sentence)}
+                          title="Click to add"
+                        >
+                          Click to add example
+                        </span>
+                      )}
+                      
+                      {/* AI Generation Toggle for Sentence */}
+                      {isNewCard && (
                         <button
-                          onClick={() => playAudio(wordObj.sentence)}
-                          className="p-1 text-gray-500 hover:bg-gray-50 rounded transition-colors"
-                          title="Listen to sentence"
+                          onClick={() => toggleAiGeneration(originalIndex, 'sentence')}
+                          className={`p-1 rounded transition-colors flex-shrink-0 ${
+                            aiOptions.sentence 
+                              ? 'bg-purple-100 text-purple-700 hover:bg-purple-200' 
+                              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                          }`}
+                          title="Toggle AI generation for sentence"
                         >
                           <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                            <path fillRule="evenodd" d="M9.383 3.076A1 1 0 0110 4v12a1 1 0 01-1.617.793L4.646 14H2a1 1 0 01-1-1V7a1 1 0 011-1h2.646l3.737-2.793a1 1 0 011.617.793z" clipRule="evenodd" />
+                            <path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v3h8v-3z" />
                           </svg>
                         </button>
-                      </div>
-                    ) : (
-                      <span 
-                        className="text-sm text-gray-400 italic cursor-pointer hover:text-blue-600 transition-colors"
-                        onClick={() => startEdit(originalIndex, 'sentence', wordObj.sentence)}
-                      >
-                        Click to add example
-                      </span>
-                    )}
+                      )}
+                    </div>
                   </td>
                   
                   {/* Tags Column */}
@@ -726,22 +822,6 @@ const SetViewer = ({ set, onBack, onUpdateSet, onDeleteSet, viewMode, onViewMode
                 </tr>
               );
             })}
-            
-            {/* Add New Row - Dashed - Only show if not creating a new card */}
-            {!isCreatingNewCard && (
-              <tr className="border-2 border-dashed border-gray-300 hover:border-blue-400 hover:bg-blue-50/30 cursor-pointer transition-all duration-200" onClick={addNewWord}>
-                <td colSpan="6" className="px-4 py-8 text-center">
-                  <div className="flex items-center justify-center space-x-3 text-gray-500 hover:text-blue-600 transition-colors">
-                    <div className="w-8 h-8 rounded-full border-2 border-dashed border-current flex items-center justify-center">
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                      </svg>
-                    </div>
-                    <span className="font-medium">Add New Card</span>
-                  </div>
-                </td>
-              </tr>
-            )}
           </tbody>
         </table>
       </div>
@@ -750,109 +830,234 @@ const SetViewer = ({ set, onBack, onUpdateSet, onDeleteSet, viewMode, onViewMode
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
-        
-        {/* Header */}
-        <div className="mb-8">
-          {/* Top Row - Back Button and Title */}
-          <div className="flex items-center space-x-4 mb-6">
-            <button
-              onClick={handleBack}
-              className="flex items-center px-4 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-50 rounded-lg transition-all duration-200 border border-gray-200 hover:border-gray-300"
-            >
-              <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-              </svg>
-              Back
-            </button>
-            
-            <div className="h-8 w-px bg-gray-300"></div>
-            
-            <div>
-              <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">{set.name}</h1>
-              <p className="text-gray-600 mt-1">{filteredWords.length} words {searchTerm && `(filtered from ${set.words.length})`}</p>
+      {/* Custom CSS for smooth pulse animation */}
+      <style>{`
+        @keyframes pulse-slow {
+          0%, 100% {
+            opacity: 1;
+          }
+          50% {
+            opacity: 0.8;
+          }
+        }
+        .animate-pulse-slow {
+          animation: pulse-slow 2s cubic-bezier(0.4, 0, 0.6, 1) 3;
+        }
+      `}</style>
+      
+      {/* Sticky Header */}
+      <div className="sticky top-0 z-40 bg-white/70 backdrop-blur-md border-b border-gray-200/30">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-3 sm:py-4">
+          <div className="flex flex-col space-y-3">
+            {/* Top Row - Back Button and Title */}
+            <div className="flex items-center space-x-2 sm:space-x-4 min-w-0">
+              <button
+                onClick={handleBack}
+                className="flex items-center px-3 sm:px-4 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-50 rounded-lg transition-all duration-200 border border-gray-200 hover:border-gray-300 flex-shrink-0"
+              >
+                <svg className="w-4 h-4 mr-1 sm:mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
+                <span className="hidden sm:inline">Back</span>
+              </button>
+              
+              <div className="h-6 sm:h-8 w-px bg-gray-300 flex-shrink-0"></div>
+              
+              <div className="min-w-0 flex-1">
+                {editingCard === 'setName' && editingField === 'name' ? (
+                  <input
+                    type="text"
+                    value={editingValue}
+                    onChange={(e) => setEditingValue(e.target.value)}
+                    className="text-lg sm:text-2xl lg:text-3xl font-bold text-gray-900 bg-transparent border-b-2 border-blue-500 focus:outline-none focus:border-blue-600 w-full"
+                    onBlur={saveEdit}
+                    onKeyPress={(e) => e.key === 'Enter' && saveEdit()}
+                    autoFocus
+                    placeholder="Enter set name..."
+                  />
+                ) : (
+                  <h1 
+                    className="text-lg sm:text-2xl lg:text-3xl font-bold text-gray-900 truncate cursor-text hover:text-blue-600 transition-colors"
+                    onClick={() => {
+                      setEditingCard('setName');
+                      setEditingField('name');
+                      setEditingValue(set.name);
+                    }}
+                    title="Click to edit set name"
+                  >
+                    {set.name}
+                  </h1>
+                )}
+                <p className="text-xs sm:text-sm text-gray-600">
+                  {filteredWords.length} word{filteredWords.length !== 1 ? 's' : ''} 
+                  {searchTerm && ` (filtered from ${set.words.length})`}
+                </p>
+              </div>
             </div>
-          </div>
-          
-          {/* Bottom Row - Controls */}
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-4 sm:space-y-0">
-            {/* Left Side - Search */}
-            <div className="relative">
-              <input
-                type="text"
-                placeholder="Search words..."
-                value={searchTerm}
-                onChange={(e) => onSearchChange(e.target.value)}
-                className="pl-10 pr-4 py-2 w-full sm:w-80 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white/80 backdrop-blur-sm shadow-sm"
-              />
-              <svg className="w-5 h-5 text-gray-400 absolute left-3 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
-            </div>
             
-            {/* Right Side - View Toggle and Actions */}
-            <div className="flex items-center space-x-3">
-              {/* View Toggle */}
-              <div className="flex items-center bg-white/80 backdrop-blur-sm rounded-lg border border-gray-200 p-1 shadow-sm">
-                <button
-                  onClick={() => onViewModeChange('cards')}
-                  className={`flex items-center px-3 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
-                    viewMode === 'cards'
-                      ? 'bg-blue-600 text-white shadow-sm'
-                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
-                  }`}
-                >
-                  <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
+            {/* Bottom Row - Controls */}
+            <div className="flex flex-col gap-3">
+              {/* Top Row - Search and View Toggle */}
+              <div className="flex items-center gap-2 justify-between">
+                {/* Search */}
+                <div className="relative flex-1 md:w-64 md:flex-initial">
+                  <input
+                    type="text"
+                    placeholder="Search words..."
+                    value={searchTerm}
+                    onChange={(e) => onSearchChange(e.target.value)}
+                    className="pl-10 pr-4 py-2 w-full border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white/80 backdrop-blur-sm shadow-sm text-sm"
+                  />
+                  <svg className="w-4 h-4 text-gray-400 absolute left-3 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                   </svg>
-                  Cards
-                </button>
-                <button
-                  onClick={() => onViewModeChange('table')}
-                  className={`flex items-center px-3 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
-                    viewMode === 'table'
-                      ? 'bg-blue-600 text-white shadow-sm'
-                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
-                  }`}
-                >
-                  <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                  </svg>
-                  Table
-                </button>
+                </div>
+                
+                {/* Right Side Container */}
+                <div className="flex items-center gap-2">
+                  {/* View Toggle - Always on top row */}
+                  <div className="flex items-center bg-white/80 backdrop-blur-sm rounded-lg border border-gray-200 p-0.5 sm:p-1 shadow-sm flex-shrink-0">
+                    <button
+                      onClick={() => onViewModeChange('cards')}
+                      className={`flex items-center px-2 sm:px-3 py-1.5 sm:py-2 rounded-md text-xs sm:text-sm font-medium transition-all duration-200 ${
+                        viewMode === 'cards'
+                          ? 'bg-blue-600 text-white shadow-sm'
+                          : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                      }`}
+                      title="Cards View"
+                    >
+                      <svg className="w-3 h-3 sm:w-4 sm:h-4 sm:mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
+                      </svg>
+                      <span className="hidden sm:inline">Cards</span>
+                    </button>
+                    <button
+                      onClick={() => onViewModeChange('table')}
+                      className={`flex items-center px-2 sm:px-3 py-1.5 sm:py-2 rounded-md text-xs sm:text-sm font-medium transition-all duration-200 ${
+                        viewMode === 'table'
+                          ? 'bg-blue-600 text-white shadow-sm'
+                          : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                      }`}
+                      title="Table View"
+                    >
+                      <svg className="w-3 h-3 sm:w-4 sm:h-4 sm:mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                      </svg>
+                      <span className="hidden sm:inline">Table</span>
+                    </button>
+                  </div>
+                  
+                  {/* Action Buttons - Hidden on narrow screens, shown on md+ screens */}
+                  <div className="hidden md:flex items-center gap-2">
+                    {/* Add New Card Button */}
+                    <button
+                      onClick={addNewWord}
+                      disabled={isCreatingNewCard}
+                      className={`inline-flex items-center justify-center px-3 py-2 text-sm font-medium rounded-lg transition-all duration-200 shadow-sm hover:shadow-md flex-shrink-0 ${
+                        isCreatingNewCard
+                          ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                          : 'bg-purple-600 text-white hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500'
+                      }`}
+                      title={isCreatingNewCard ? "Finish adding current card first" : "Add a new vocabulary card"}
+                    >
+                      <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                      </svg>
+                      <span>Add Card</span>
+                    </button>
+                    
+                    {/* Export Button */}
+                    <button
+                      onClick={() => setShowExportModal(true)}
+                      className="inline-flex items-center justify-center px-3 py-2 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-all duration-200 shadow-sm hover:shadow-md flex-shrink-0"
+                      title="Export Set"
+                    >
+                      <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                      <span>Export</span>
+                    </button>
+                    
+                    {/* Save Button */}
+                    <button
+                      onClick={handleSaveChanges}
+                      disabled={!hasUnsavedChanges}
+                      className={`inline-flex items-center justify-center px-3 py-2 text-sm font-medium rounded-lg transition-all duration-200 shadow-sm hover:shadow-md flex-shrink-0 ${
+                        hasUnsavedChanges 
+                          ? 'bg-blue-600 text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500' 
+                          : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                      }`}
+                      title="Save Changes"
+                    >
+                      <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+                      </svg>
+                      <span>Save</span>
+                      {hasUnsavedChanges && (
+                        <div className="w-2 h-2 bg-red-400 rounded-full ml-1.5 animate-pulse"></div>
+                      )}
+                    </button>
+                  </div>
+                </div>
               </div>
               
-              {/* Action Buttons */}
-              <button
-                onClick={() => setShowExportModal(true)}
-                className="inline-flex items-center px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-all duration-200 shadow-sm hover:shadow-md"
-              >
-                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-                Export
-              </button>
-              
-              <button
-                onClick={handleSaveChanges}
-                disabled={!hasUnsavedChanges}
-                className={`inline-flex items-center px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 shadow-sm hover:shadow-md ${
-                  hasUnsavedChanges 
-                    ? 'bg-blue-600 text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500' 
-                    : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                }`}
-              >
-                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
-                </svg>
-                Save Changes
-                {hasUnsavedChanges && (
-                  <div className="w-2 h-2 bg-red-400 rounded-full ml-2 animate-pulse"></div>
-                )}
-              </button>
+              {/* Bottom Row - Action Buttons (only on narrow screens) */}
+              <div className="flex md:hidden items-center gap-2">
+                {/* Add New Card Button - 33.33% width */}
+                <button
+                  onClick={addNewWord}
+                  disabled={isCreatingNewCard}
+                  className={`flex-1 inline-flex items-center justify-center px-2 py-2 text-xs font-medium rounded-lg transition-all duration-200 shadow-sm hover:shadow-md ${
+                    isCreatingNewCard
+                      ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                      : 'bg-purple-600 text-white hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500'
+                  }`}
+                  title={isCreatingNewCard ? "Finish adding current card first" : "Add a new vocabulary card"}
+                >
+                  <svg className="w-4 h-4 sm:mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                  </svg>
+                  <span className="ml-1">Add</span>
+                </button>
+                
+                {/* Export Button - 33.33% width */}
+                <button
+                  onClick={() => setShowExportModal(true)}
+                  className="flex-1 inline-flex items-center justify-center px-2 py-2 bg-green-600 text-white text-xs font-medium rounded-lg hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-all duration-200 shadow-sm hover:shadow-md"
+                  title="Export Set"
+                >
+                  <svg className="w-4 h-4 sm:mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  <span className="ml-1">Export</span>
+                </button>
+                
+                {/* Save Button - 33.33% width */}
+                <button
+                  onClick={handleSaveChanges}
+                  disabled={!hasUnsavedChanges}
+                  className={`flex-1 inline-flex items-center justify-center px-2 py-2 text-xs font-medium rounded-lg transition-all duration-200 shadow-sm hover:shadow-md ${
+                    hasUnsavedChanges 
+                      ? 'bg-blue-600 text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500' 
+                      : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                  }`}
+                  title="Save Changes"
+                >
+                  <svg className="w-4 h-4 sm:mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+                  </svg>
+                  <span className="ml-1">Save</span>
+                  {hasUnsavedChanges && (
+                    <div className="w-2 h-2 bg-red-400 rounded-full ml-1.5 animate-pulse"></div>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         </div>
+      </div>
+      
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
         
         {/* No results message */}
         {filteredWords.length === 0 && searchTerm && (
@@ -887,32 +1092,6 @@ const SetViewer = ({ set, onBack, onUpdateSet, onDeleteSet, viewMode, onViewMode
                     />
                   );
                 })}
-                
-                {/* Dotted Add Card Button - Only show if not creating a new card */}
-                {!isCreatingNewCard && (
-                  <div 
-                    onClick={addNewWord}
-                    className="group bg-white/40 backdrop-blur-sm rounded-xl border-2 border-dashed border-gray-300 hover:border-blue-400 p-4 sm:p-6 hover:bg-white/60 transition-all duration-300 cursor-pointer min-h-[200px] flex flex-col items-center justify-center"
-                  >
-                    {/* Plus Icon */}
-                    <div className="w-12 h-12 rounded-full border-2 border-dashed border-gray-400 group-hover:border-blue-500 flex items-center justify-center mb-4 transition-colors duration-300">
-                      <svg className="w-6 h-6 text-gray-400 group-hover:text-blue-500 transition-colors duration-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                      </svg>
-                    </div>
-                    
-                    {/* Text */}
-                    <h3 className="text-lg font-medium text-gray-500 group-hover:text-blue-600 transition-colors duration-300 mb-2">Add New Card</h3>
-                    <p className="text-sm text-gray-400 group-hover:text-blue-500 transition-colors duration-300 text-center">Click to add a new vocabulary word</p>
-                    
-                    {/* Dotted decoration */}
-                    <div className="mt-4 flex space-x-2">
-                      <div className="w-2 h-2 rounded-full bg-gray-300 group-hover:bg-blue-400 transition-colors duration-300"></div>
-                      <div className="w-2 h-2 rounded-full bg-gray-300 group-hover:bg-blue-400 transition-colors duration-300 animation-delay-100"></div>
-                      <div className="w-2 h-2 rounded-full bg-gray-300 group-hover:bg-blue-400 transition-colors duration-300 animation-delay-200"></div>
-                    </div>
-                  </div>
-                )}
               </div>
             ) : (
               <WordTable />
@@ -1028,6 +1207,50 @@ const SetViewer = ({ set, onBack, onUpdateSet, onDeleteSet, viewMode, onViewMode
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Notification Toast */}
+      {notification && (
+        <div className={`fixed bottom-4 left-4 right-4 sm:left-1/2 sm:right-auto sm:transform sm:-translate-x-1/2 sm:max-w-md z-50 transition-all duration-300 ease-in-out ${
+          showNotification ? 'translate-y-0 opacity-100' : 'translate-y-8 opacity-0'
+        }`}>
+          <div className={`flex items-center justify-between p-4 rounded-xl shadow-lg backdrop-blur-sm ${
+            notification.type === 'success' 
+              ? 'bg-green-500/90 text-white' 
+              : notification.type === 'warning'
+              ? 'bg-amber-500/90 text-white'
+              : 'bg-red-500/90 text-white'
+          }`}>
+            <div className="flex items-center space-x-3 flex-1 min-w-0">
+              {notification.type === 'success' ? (
+                <svg className="w-5 h-5 text-white flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              ) : notification.type === 'warning' ? (
+                <svg className="w-5 h-5 text-white flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1-1.964-1-2.732 0L4.082 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              ) : (
+                <svg className="w-5 h-5 text-white flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              )}
+              <span className="font-medium text-sm sm:text-base">{notification.message}</span>
+            </div>
+            
+            <button
+              onClick={() => {
+                setShowNotification(false);
+                setTimeout(() => setNotification(null), 300);
+              }}
+              className="p-1 hover:bg-white/20 rounded-lg transition-colors duration-200 ml-3"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
           </div>
         </div>
       )}
