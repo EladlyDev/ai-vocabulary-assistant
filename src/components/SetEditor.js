@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
+import BackToTop from './BackToTop';
 
 const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [] }) => {
   const [title, setTitle] = useState(set?.name || 'New Set');
@@ -517,6 +518,9 @@ leer"
             </div>
           </div>
         )}
+
+        {/* Back to Top Button */}
+        <BackToTop />
       </div>
     </div>
   );

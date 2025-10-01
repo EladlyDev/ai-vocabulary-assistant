@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import ExportModal from './ExportModal';
+import BackToTop from './BackToTop';
 
 const Dashboard = ({ onCreateNewSet, onOpenSet, groups, mockSets, onCreateGroup, onUpdateGroup, onDeleteGroup, onDeleteSet, onMoveSetToGroup }) => {
   const [showExportModal, setShowExportModal] = useState(false);
@@ -338,6 +339,23 @@ const Dashboard = ({ onCreateNewSet, onOpenSet, groups, mockSets, onCreateGroup,
         </div>
 
         {/* Groups Section */}
+        <div className="mb-6">
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-2xl font-bold text-gray-900">Vocabulary Groups</h2>
+            {groups.length > 0 && (
+              <button
+                onClick={() => setIsCreatingNewGroup(true)}
+                className="group inline-flex items-center px-4 py-2 bg-gradient-to-r from-blue-600 to-purple-600 text-white text-sm font-semibold rounded-lg hover:from-blue-700 hover:to-purple-700 transition-all duration-200 shadow-md hover:shadow-lg transform hover:-translate-y-0.5"
+              >
+                <svg className="w-4 h-4 mr-2 transition-transform duration-200 group-hover:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                </svg>
+                Create New Group
+              </button>
+            )}
+          </div>
+        </div>
+
         <div 
           className="space-y-4"
           onDragOver={(e) => {
@@ -632,9 +650,9 @@ const Dashboard = ({ onCreateNewSet, onOpenSet, groups, mockSets, onCreateGroup,
                 </div>
                 </React.Fragment>
               ))}
-              
-              {/* Add New Group Button - Dashed */}
-              {!isCreatingNewGroup ? (
+
+              {/* Beautiful Dashed Button - Always at the end */}
+              {!isCreatingNewGroup && (
                 <div 
                   onClick={() => setIsCreatingNewGroup(true)}
                   className="group bg-white/40 backdrop-blur-sm rounded-2xl border-2 border-dashed border-gray-300 hover:border-blue-400 p-8 hover:bg-white/60 transition-all duration-300 cursor-pointer min-h-[120px] flex flex-col items-center justify-center"
@@ -650,8 +668,10 @@ const Dashboard = ({ onCreateNewSet, onOpenSet, groups, mockSets, onCreateGroup,
                   <h3 className="text-lg font-medium text-gray-500 group-hover:text-blue-600 transition-colors duration-300 mb-2">Create New Group</h3>
                   <p className="text-sm text-gray-400 group-hover:text-blue-500 transition-colors duration-300 text-center">Organize your vocabulary sets into themed groups</p>
                 </div>
-              ) : (
-                /* New Group Creation Form */
+              )}
+
+              {/* New Group Creation Form - appears inline */}
+              {isCreatingNewGroup && (
                 <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-md border border-white/50 p-6">
                   <h3 className="text-lg font-semibold text-gray-900 mb-4">Create New Group</h3>
                   
@@ -966,6 +986,9 @@ const Dashboard = ({ onCreateNewSet, onOpenSet, groups, mockSets, onCreateGroup,
           </div>
         </div>
       )}
+
+      {/* Back to Top Button */}
+      <BackToTop />
     </div>
   );
 };
