@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import BackToTop from './BackToTop';
 
-const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [] }) => {
+const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateGroup }) => {
   const [title, setTitle] = useState(set?.name || 'New Set');
   const [words, setWords] = useState(set?.words ? set.words.join('\n') : '');
   const [sourceLanguage, setSourceLanguage] = useState('Auto-detect');
@@ -22,6 +22,13 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [] }) => {
   const groupDropdownRef = useRef(null);
 
   const languages = ['Spanish', 'French', 'German', 'English', 'Auto-detect'];
+
+  // Update selectedGroupId when groups change (e.g., new group created)
+  useEffect(() => {
+    if (groups.length > 0 && !selectedGroupId) {
+      setSelectedGroupId(groups[0].id);
+    }
+  }, [groups, selectedGroupId]);
 
   // Track original state for change detection
   useEffect(() => {
@@ -218,8 +225,8 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [] }) => {
             </div>
           </div>
           
-          {/* Group Selection - Only show when creating new set */}
-          {!set?.id && groups.length > 0 && (
+          {/* Group Selection - Show when creating new set */}
+          {!set?.id && (
             <div className="mb-8">
               <h2 className="text-lg font-semibold text-gray-900 mb-6 flex items-center">
                 <svg className="w-5 h-5 mr-3 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -237,7 +244,7 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [] }) => {
                     className="w-full bg-white border-2 border-gray-200 rounded-xl px-4 py-3 text-left focus:border-purple-500 focus:ring-0 transition-all duration-200 hover:border-gray-300 text-gray-700 font-medium flex items-center justify-between"
                   >
                     <div className="flex items-center">
-                      {selectedGroupId && (
+                      {selectedGroupId && groups.find(g => g.id === selectedGroupId) && (
                         <div className={`w-4 h-4 rounded-full mr-3 bg-gradient-to-r ${
                           groups.find(g => g.id === selectedGroupId)?.color === 'blue' ? 'from-blue-500 to-blue-600' :
                           groups.find(g => g.id === selectedGroupId)?.color === 'green' ? 'from-green-500 to-green-600' :
@@ -249,7 +256,13 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [] }) => {
                           'from-gray-500 to-gray-600'
                         }`}></div>
                       )}
-                      <span>{groups.find(g => g.id === selectedGroupId)?.name || 'Select a group'}</span>
+                      <span>
+                        {selectedGroupId && groups.find(g => g.id === selectedGroupId) 
+                          ? groups.find(g => g.id === selectedGroupId)?.name 
+                          : groups.length > 0 
+                            ? 'Select a group' 
+                            : 'No groups available'}
+                      </span>
                     </div>
                     <svg className={`w-5 h-5 text-gray-400 transition-transform duration-200 ${groupDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -257,33 +270,61 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [] }) => {
                   </button>
                   {groupDropdownOpen && (
                     <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-50 py-1 max-h-60 overflow-y-auto">
-                      {groups.map((group) => (
+                      {groups.length > 0 ? (
+                        groups.map((group) => (
+                          <button
+                            key={group.id}
+                            onClick={() => {
+                              setSelectedGroupId(group.id);
+                              setGroupDropdownOpen(false);
+                            }}
+                            className="w-full text-left px-4 py-3 hover:bg-purple-50 transition-colors duration-150 text-gray-700 font-medium flex items-center"
+                          >
+                            <div className={`w-4 h-4 rounded-full mr-3 bg-gradient-to-r ${
+                              group.color === 'blue' ? 'from-blue-500 to-blue-600' :
+                              group.color === 'green' ? 'from-green-500 to-green-600' :
+                              group.color === 'purple' ? 'from-purple-500 to-purple-600' :
+                              group.color === 'red' ? 'from-red-500 to-red-600' :
+                              group.color === 'yellow' ? 'from-yellow-500 to-yellow-600' :
+                              group.color === 'pink' ? 'from-pink-500 to-pink-600' :
+                              group.color === 'indigo' ? 'from-indigo-500 to-indigo-600' :
+                              'from-gray-500 to-gray-600'
+                            }`}></div>
+                            <div>
+                              <div className="font-semibold">{group.name}</div>
+                              <div className="text-xs text-gray-500">
+                                {group.sets.length} set{group.sets.length !== 1 ? 's' : ''}
+                              </div>
+                            </div>
+                          </button>
+                        ))
+                      ) : (
                         <button
-                          key={group.id}
                           onClick={() => {
-                            setSelectedGroupId(group.id);
+                            if (onCreateGroup) {
+                              const newGroup = onCreateGroup({
+                                name: 'My Vocabulary',
+                                color: 'blue'
+                              });
+                              if (newGroup && newGroup.id) {
+                                setSelectedGroupId(newGroup.id);
+                              }
+                            }
                             setGroupDropdownOpen(false);
                           }}
-                          className="w-full text-left px-4 py-3 hover:bg-purple-50 transition-colors duration-150 text-gray-700 font-medium flex items-center"
+                          className="w-full text-left px-4 py-3 hover:bg-purple-50 transition-colors duration-150 text-purple-600 font-medium flex items-center"
                         >
-                          <div className={`w-4 h-4 rounded-full mr-3 bg-gradient-to-r ${
-                            group.color === 'blue' ? 'from-blue-500 to-blue-600' :
-                            group.color === 'green' ? 'from-green-500 to-green-600' :
-                            group.color === 'purple' ? 'from-purple-500 to-purple-600' :
-                            group.color === 'red' ? 'from-red-500 to-red-600' :
-                            group.color === 'yellow' ? 'from-yellow-500 to-yellow-600' :
-                            group.color === 'pink' ? 'from-pink-500 to-pink-600' :
-                            group.color === 'indigo' ? 'from-indigo-500 to-indigo-600' :
-                            'from-gray-500 to-gray-600'
-                          }`}></div>
+                          <svg className="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                          </svg>
                           <div>
-                            <div className="font-semibold">{group.name}</div>
+                            <div className="font-semibold">Create New Group</div>
                             <div className="text-xs text-gray-500">
-                              {group.sets.length} set{group.sets.length !== 1 ? 's' : ''}
+                              Create "My Vocabulary" group
                             </div>
                           </div>
                         </button>
-                      ))}
+                      )}
                     </div>
                   )}
                 </div>

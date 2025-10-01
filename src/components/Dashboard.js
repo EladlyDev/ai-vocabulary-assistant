@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import ExportModal from './ExportModal';
 import BackToTop from './BackToTop';
 
@@ -20,6 +20,8 @@ const Dashboard = ({ onCreateNewSet, onOpenSet, groups, mockSets, onCreateGroup,
   const [setToDelete, setSetToDelete] = useState(null);
   const [notification, setNotification] = useState(null);
   const [showNotification, setShowNotification] = useState(false);
+  const [scrollToGroupId, setScrollToGroupId] = useState(null);
+  const groupRefs = useRef({});
 
   // Calculate total sets and words from groups
   const totalSets = mockSets ? mockSets.length : 0;
@@ -88,17 +90,41 @@ const Dashboard = ({ onCreateNewSet, onOpenSet, groups, mockSets, onCreateGroup,
     { name: 'violet', label: 'Mystic Violet', gradient: 'from-violet-500 to-purple-600' }
   ];
 
+  // Helper function to get a random color
+  const getRandomColor = () => {
+    const randomIndex = Math.floor(Math.random() * availableColors.length);
+    return availableColors[randomIndex].name;
+  };
+
   const handleCreateNewGroup = () => {
     if (newGroupName.trim()) {
-      onCreateGroup({
+      const newGroup = onCreateGroup({
         name: newGroupName.trim(),
         color: newGroupColor
       });
       setNewGroupName('');
-      setNewGroupColor('blue');
+      setNewGroupColor(getRandomColor());
       setIsCreatingNewGroup(false);
+      
+      // Set the ID to scroll to after the group is created
+      if (newGroup && newGroup.id) {
+        setScrollToGroupId(newGroup.id);
+      }
     }
   };
+
+  // Scroll to newly created group
+  useEffect(() => {
+    if (scrollToGroupId && groupRefs.current[scrollToGroupId]) {
+      setTimeout(() => {
+        groupRefs.current[scrollToGroupId]?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'center'
+        });
+        setScrollToGroupId(null);
+      }, 100);
+    }
+  }, [scrollToGroupId, groups]);
 
   const handleEditGroup = (group) => {
     setEditingGroup(group);
@@ -341,16 +367,20 @@ const Dashboard = ({ onCreateNewSet, onOpenSet, groups, mockSets, onCreateGroup,
         {/* Groups Section */}
         <div className="mb-6">
           <div className="flex items-center justify-between mb-6">
-            <h2 className="text-2xl font-bold text-gray-900">Vocabulary Groups</h2>
+            <h2 className="text-xl sm:text-2xl font-bold text-gray-900">Vocabulary Groups</h2>
             {groups.length > 0 && (
               <button
-                onClick={() => setIsCreatingNewGroup(true)}
-                className="group inline-flex items-center px-4 py-2 bg-gradient-to-r from-blue-600 to-purple-600 text-white text-sm font-semibold rounded-lg hover:from-blue-700 hover:to-purple-700 transition-all duration-200 shadow-md hover:shadow-lg transform hover:-translate-y-0.5"
+                onClick={() => {
+                  setNewGroupColor(getRandomColor());
+                  setIsCreatingNewGroup(true);
+                }}
+                className="group hidden sm:inline-flex items-center px-3 sm:px-4 py-2 bg-gradient-to-r from-blue-600 to-purple-600 text-white text-sm font-semibold rounded-lg hover:from-blue-700 hover:to-purple-700 transition-all duration-200 shadow-md hover:shadow-lg transform hover:-translate-y-0.5"
               >
                 <svg className="w-4 h-4 mr-2 transition-transform duration-200 group-hover:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
                 </svg>
-                Create New Group
+                <span className="hidden md:inline">Create New Group</span>
+                <span className="md:hidden">New Group</span>
               </button>
             )}
           </div>
@@ -373,28 +403,105 @@ const Dashboard = ({ onCreateNewSet, onOpenSet, groups, mockSets, onCreateGroup,
         >
           {groups.length === 0 ? (
             <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 sm:p-8 shadow-md border border-white/50">
-              <div className="text-center">
-                <svg className="w-12 h-12 sm:w-16 sm:h-16 text-gray-300 mx-auto mb-3 sm:mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M19 11H5m14-7H5m14 14H5" />
-                </svg>
-                <h3 className="text-base sm:text-lg font-medium text-gray-500 mb-2">No vocabulary groups yet</h3>
-                <p className="text-sm sm:text-base text-gray-400 mb-4 sm:mb-6 px-2">Create your first group to organize your vocabulary sets</p>
-                <button
-                  onClick={() => setIsCreatingNewGroup(true)}
-                  className="group inline-flex items-center px-4 sm:px-6 py-2.5 sm:py-3 bg-gradient-to-r from-blue-600 to-purple-600 text-white text-sm sm:text-base font-semibold rounded-lg sm:rounded-xl hover:from-blue-700 hover:to-purple-700 transition-all duration-200 shadow-md hover:shadow-lg transform hover:-translate-y-0.5"
-                >
-                  <svg className="w-4 h-4 sm:w-5 sm:h-5 mr-2 transition-transform duration-200 group-hover:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+              {!isCreatingNewGroup ? (
+                <div className="text-center">
+                  <svg className="w-12 h-12 sm:w-16 sm:h-16 text-gray-300 mx-auto mb-3 sm:mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M19 11H5m14-7H5m14 14H5" />
                   </svg>
-                  Create Your First Group
-                </button>
-              </div>
+                  <h3 className="text-base sm:text-lg font-medium text-gray-500 mb-2">No vocabulary groups yet</h3>
+                  <p className="text-sm sm:text-base text-gray-400 mb-4 sm:mb-6 px-2">Create your first group to organize your vocabulary sets</p>
+                  <button
+                    onClick={() => {
+                      setNewGroupColor(getRandomColor());
+                      setIsCreatingNewGroup(true);
+                    }}
+                    className="group inline-flex items-center px-4 sm:px-6 py-2.5 sm:py-3 bg-gradient-to-r from-blue-600 to-purple-600 text-white text-sm sm:text-base font-semibold rounded-lg sm:rounded-xl hover:from-blue-700 hover:to-purple-700 transition-all duration-200 shadow-md hover:shadow-lg transform hover:-translate-y-0.5"
+                  >
+                    <svg className="w-4 h-4 sm:w-5 sm:h-5 mr-2 transition-transform duration-200 group-hover:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                    </svg>
+                    Create Your First Group
+                  </button>
+                </div>
+              ) : (
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4">Create New Group</h3>
+                  
+                  <div className="space-y-4">
+                    {/* Group Name */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Group Name</label>
+                      <input
+                        type="text"
+                        value={newGroupName}
+                        onChange={(e) => setNewGroupName(e.target.value)}
+                        placeholder="Enter group name..."
+                        className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:outline-none transition-colors"
+                        autoFocus
+                      />
+                    </div>
+                    
+                    {/* Color Selection */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-3">Choose Color Theme</label>
+                      <div className="grid grid-cols-5 gap-3">
+                        {availableColors.map((color) => (
+                          <button
+                            key={color.name}
+                            onClick={() => setNewGroupColor(color.name)}
+                            className={`relative p-3 rounded-xl transition-all duration-200 ${
+                              newGroupColor === color.name 
+                                ? 'ring-2 ring-blue-500 ring-offset-2' 
+                                : 'hover:scale-105'
+                            }`}
+                            title={color.label}
+                          >
+                            <div className={`w-full h-8 bg-gradient-to-r ${color.gradient} rounded-lg`}></div>
+                            {newGroupColor === color.name && (
+                              <div className="absolute inset-0 flex items-center justify-center">
+                                <svg className="w-6 h-6 text-white drop-shadow-lg" fill="currentColor" viewBox="0 0 20 20">
+                                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                </svg>
+                              </div>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    
+                    {/* Actions */}
+                    <div className="flex space-x-3 pt-2">
+                      <button
+                        onClick={() => {
+                          setIsCreatingNewGroup(false);
+                          setNewGroupName('');
+                        }}
+                        className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleCreateNewGroup}
+                        disabled={!newGroupName.trim()}
+                        className={`flex-1 px-4 py-2 rounded-lg text-white font-medium transition-all duration-200 ${
+                          newGroupName.trim()
+                            ? `bg-gradient-to-r ${getGroupColor(newGroupColor)} hover:shadow-lg`
+                            : 'bg-gray-300 cursor-not-allowed'
+                        }`}
+                      >
+                        Create Group
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <>
               {groups.map((group, index) => (
                 <React.Fragment key={group.id}>
                   <div 
+                    ref={(el) => groupRefs.current[group.id] = el}
                     data-group-id={group.id}
                     className={`bg-white/80 backdrop-blur-sm rounded-2xl shadow-md border border-white/50 overflow-hidden transition-all duration-200 ${
                       dragOverGroup === group.id && draggedGroup ? 'ring-2 ring-blue-400 scale-[1.02]' : ''
@@ -654,7 +761,10 @@ const Dashboard = ({ onCreateNewSet, onOpenSet, groups, mockSets, onCreateGroup,
               {/* Beautiful Dashed Button - Always at the end */}
               {!isCreatingNewGroup && (
                 <div 
-                  onClick={() => setIsCreatingNewGroup(true)}
+                  onClick={() => {
+                    setNewGroupColor(getRandomColor());
+                    setIsCreatingNewGroup(true);
+                  }}
                   className="group bg-white/40 backdrop-blur-sm rounded-2xl border-2 border-dashed border-gray-300 hover:border-blue-400 p-8 hover:bg-white/60 transition-all duration-300 cursor-pointer min-h-[120px] flex flex-col items-center justify-center"
                 >
                   {/* Plus Icon */}
@@ -723,7 +833,6 @@ const Dashboard = ({ onCreateNewSet, onOpenSet, groups, mockSets, onCreateGroup,
                         onClick={() => {
                           setIsCreatingNewGroup(false);
                           setNewGroupName('');
-                          setNewGroupColor('blue');
                         }}
                         className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
                       >

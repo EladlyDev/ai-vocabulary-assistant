@@ -407,6 +407,7 @@ function App() {
           onUpdateSet={setActiveSet}
           onSaveSet={handleSaveNewSet}
           groups={groups}
+          onCreateGroup={handleCreateGroup}
         />
       )}
       {currentView.name === 'viewer' && (
