@@ -241,10 +241,13 @@ const SetViewer = ({
     // Create new words in database
     if (onCreateWord) {
       const wordCreationPromises = [];
+      const wordUpdatePromises = [];
       const wordsToCreate = [];
       
-      for (const word of filteredWords) {
+      for (let i = 0; i < filteredWords.length; i++) {
+        const word = filteredWords[i];
         const wordObj = typeof word === 'string' ? { word } : word;
+        
         // Only create if word doesn't have an ID (new word)
         if (!wordObj.id || wordObj.id.startsWith('temp-')) {
           wordsToCreate.push(wordObj);
@@ -263,12 +266,44 @@ const SetViewer = ({
               tags: wordObj.tags || []
             })
           );
+        } else {
+          // Word exists - check if it was modified
+          const originalWord = originalSet?.words?.[i];
+          if (originalWord && wordObj.id) {
+            const hasChanged = 
+              wordObj.word !== originalWord.word ||
+              wordObj.translation !== originalWord.translation ||
+              wordObj.sentence !== originalWord.sentence ||
+              wordObj.sentenceTranslation !== originalWord.sentenceTranslation ||
+              wordObj.example !== originalWord.example ||
+              wordObj.image !== originalWord.image ||
+              wordObj.pronunciation !== originalWord.pronunciation;
+            
+            if (hasChanged && onUpdateWord) {
+              // Build updates object with only changed fields
+              const updates = {};
+              if (wordObj.word !== originalWord.word) updates.word = wordObj.word;
+              if (wordObj.translation !== originalWord.translation) updates.translation = wordObj.translation || '';
+              if (wordObj.sentence !== originalWord.sentence) updates.sentence = wordObj.sentence || null;
+              if (wordObj.sentenceTranslation !== originalWord.sentenceTranslation) updates.sentence_translation = wordObj.sentenceTranslation || null;
+              if (wordObj.example !== originalWord.example) updates.example = wordObj.example || null;
+              if (wordObj.image !== originalWord.image) updates.image_url = wordObj.image || null;
+              if (wordObj.pronunciation !== originalWord.pronunciation) updates.pronunciation = wordObj.pronunciation || null;
+              
+              wordUpdatePromises.push(
+                onUpdateWord(wordObj.id, updates, set.id)
+              );
+            }
+          }
         }
       }
       
-      // Wait for all words to be created
-      if (wordCreationPromises.length > 0) {
-        const createdWords = await Promise.all(wordCreationPromises);
+      // Wait for all words to be created and updated
+      if (wordCreationPromises.length > 0 || wordUpdatePromises.length > 0) {
+        const [createdWords] = await Promise.all([
+          wordCreationPromises.length > 0 ? Promise.all(wordCreationPromises) : Promise.resolve([]),
+          wordUpdatePromises.length > 0 ? Promise.all(wordUpdatePromises) : Promise.resolve([])
+        ]);
         
         // Update the set with the created words (they now have IDs)
         const updatedWords = filteredWords.map(word => {
@@ -327,7 +362,7 @@ const SetViewer = ({
   const updateWordField = useCallback((index, field, value) => {
     const word = set.words[index];
     
-    // Always update UI immediately for instant feedback
+    // Update UI immediately for instant feedback (local state only)
     const updatedWords = [...set.words];
     if (typeof updatedWords[index] === 'string') {
       updatedWords[index] = { word: updatedWords[index] };
@@ -335,20 +370,9 @@ const SetViewer = ({
     updatedWords[index] = { ...updatedWords[index], [field]: value };
     onUpdateSet({ ...set, words: updatedWords });
     
-    // If word has an ID (exists in database), schedule database update
-    if (word.id && !word.id.startsWith('temp-')) {
-      // Clear previous timer
-      if (updateTimerRef.current) {
-        clearTimeout(updateTimerRef.current);
-      }
-      
-      // Debounce database update by 300ms
-      updateTimerRef.current = setTimeout(() => {
-        const updates = { [field]: value };
-        onUpdateWord(word.id, updates, set.id);
-      }, 300);
-    }
-  }, [set, onUpdateSet, onUpdateWord]);
+    // DON'T save to database automatically - only save when user clicks "Save Changes"
+    // This prevents accidental saves on page reload
+  }, [set, onUpdateSet]);
 
   const deleteWord = (index) => {
     const word = set.words[index];
