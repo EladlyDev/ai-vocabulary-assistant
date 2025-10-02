@@ -229,11 +229,17 @@ function App() {
         });
         console.log('Set created with ID:', createdSet.id);
 
-        // Navigate to dashboard immediately after set is created
-        // (don't wait for words - they'll populate in background)
-        console.log('Navigating to dashboard...');
-        setCurrentView({ name: 'dashboard' });
-        setActiveSet(null);
+        // Navigate to the newly created set immediately
+        // Set it up with empty words array - they'll populate in real-time
+        console.log('Navigating to new set...');
+        const newSetWithWords = {
+          ...createdSet,
+          words: [],
+          groupId: groupId,
+          groupName: groups.find(g => g.id === groupId)?.name || ''
+        };
+        setActiveSet(newSetWithWords);
+        setCurrentView({ name: 'viewer' });
 
         // Create words in background if any - use batched parallel execution
         if (newSet.words && newSet.words.length > 0) {
@@ -280,12 +286,14 @@ function App() {
           setProgressNotification({
             total: wordCount,
             current: 0,
-            message: 'Creating words...'
+            message: 'Adding words to your set...'
           });
 
           // Process batches sequentially, but words within each batch in parallel
           const processBatches = async () => {
             let totalCreated = 0;
+            const createdWords = [];
+            
             for (let i = 0; i < batches.length; i++) {
               const batch = batches[i];
               console.log(`Processing batch ${i + 1}/${batches.length} (${batch.length} words)...`);
@@ -299,14 +307,23 @@ function App() {
                 );
                 
                 const results = await Promise.all(batchPromises);
-                const successCount = results.filter(r => r !== null).length;
+                const successfulWords = results.filter(r => r !== null);
+                const successCount = successfulWords.length;
                 totalCreated += successCount;
+                createdWords.push(...successfulWords);
+                
+                // Update activeSet with new words in real-time
+                setActiveSet(prev => ({
+                  ...prev,
+                  words: [...createdWords],
+                  word_count: createdWords.length
+                }));
                 
                 // Update progress notification
                 setProgressNotification({
                   total: wordCount,
                   current: totalCreated,
-                  message: `Creating words... (${totalCreated}/${wordCount})`
+                  message: `Adding words to your set... (${totalCreated}/${wordCount})`
                 });
                 
                 console.log(`Batch ${i + 1} complete: ${successCount}/${batch.length} words created`);
