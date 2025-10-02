@@ -32,6 +32,10 @@ const SetViewer = ({
   const [notification, setNotification] = useState(null);
   const [showNotification, setShowNotification] = useState(false);
   
+  // Pagination state
+  const [visibleCount, setVisibleCount] = useState(30);
+  const CARDS_PER_PAGE = 30;
+  
   // Cache for set serialization to avoid expensive JSON.stringify on every render
   const setHash = useRef(null);
   const originalSetHash = useRef(null);
@@ -466,19 +470,36 @@ const SetViewer = ({
 
   // Memoize filtered words to avoid re-computing on every render
   const filteredWords = useMemo(() => {
-    if (!searchTerm) return set.words;
+    if (!searchTerm) return set.words.map((word, index) => ({ word, originalIndex: index }));
     
     const searchLower = searchTerm.toLowerCase();
-    return set.words.filter(word => {
-      const wordText = typeof word === 'string' ? word : word.word;
-      const translation = typeof word === 'object' ? word.translation : '';
-      const sentence = typeof word === 'object' ? word.sentence : '';
-      
-      return wordText.toLowerCase().includes(searchLower) ||
-             translation.toLowerCase().includes(searchLower) ||
-             sentence.toLowerCase().includes(searchLower);
-    });
+    return set.words
+      .map((word, index) => ({ word, originalIndex: index }))
+      .filter(({ word }) => {
+        const wordText = typeof word === 'string' ? word : (word.word || '');
+        const translation = typeof word === 'object' ? (word.translation || '') : '';
+        const sentence = typeof word === 'object' ? (word.sentence || '') : '';
+        
+        return wordText.toLowerCase().includes(searchLower) ||
+               translation.toLowerCase().includes(searchLower) ||
+               sentence.toLowerCase().includes(searchLower);
+      });
   }, [set.words, searchTerm]);
+
+  // Paginated words - only show visibleCount cards
+  const visibleWords = useMemo(() => {
+    return filteredWords.slice(0, visibleCount);
+  }, [filteredWords, visibleCount]);
+
+  // Reset pagination when search term changes
+  useEffect(() => {
+    setVisibleCount(CARDS_PER_PAGE);
+  }, [searchTerm]);
+
+  // Function to load more cards
+  const handleLoadMore = () => {
+    setVisibleCount(prev => prev + CARDS_PER_PAGE);
+  };
 
   const WordCard = ({ word, index, originalIndex }) => {
     const wordObj = typeof word === 'string' ? { word } : word;
@@ -807,8 +828,7 @@ const SetViewer = ({
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-200">
-            {filteredWords.map((word, index) => {
-              const originalIndex = set.words.findIndex(w => w === word);
+            {visibleWords.map(({ word, originalIndex }, index) => {
               const wordObj = typeof word === 'string' ? { word } : word;
               const isEditing = editingCard === originalIndex;
               const isNewCard = isCreatingNewCard && originalIndex === 0;
@@ -1108,7 +1128,11 @@ const SetViewer = ({
                   </h1>
                 )}
                 <p className="text-xs sm:text-sm text-gray-600">
-                  {filteredWords.length} word{filteredWords.length !== 1 ? 's' : ''} 
+                  {visibleCount < filteredWords.length ? (
+                    <>Showing {visibleCount} of {filteredWords.length} word{filteredWords.length !== 1 ? 's' : ''}</>
+                  ) : (
+                    <>{filteredWords.length} word{filteredWords.length !== 1 ? 's' : ''}</>
+                  )}
                   {searchTerm && ` (filtered from ${set.words.length})`}
                 </p>
               </div>
@@ -1299,21 +1323,54 @@ const SetViewer = ({
         {filteredWords.length > 0 && (
           <>
             {viewMode === 'cards' ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-                {filteredWords.map((word, index) => {
-                  const originalIndex = set.words.findIndex(w => w === word);
-                  return (
-                    <WordCard 
-                      key={originalIndex} 
-                      word={word} 
-                      index={index} 
-                      originalIndex={originalIndex} 
-                    />
-                  );
-                })}
-              </div>
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+                  {visibleWords.map(({ word, originalIndex }, index) => {
+                    return (
+                      <WordCard 
+                        key={originalIndex} 
+                        word={word} 
+                        index={index} 
+                        originalIndex={originalIndex} 
+                      />
+                    );
+                  })}
+                </div>
+                
+                {/* Load More Button */}
+                {visibleCount < filteredWords.length && (
+                  <div className="flex justify-center mt-8">
+                    <button
+                      onClick={handleLoadMore}
+                      className="inline-flex items-center px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-xl hover:from-blue-700 hover:to-purple-700 transition-all duration-200 shadow-lg hover:shadow-xl"
+                    >
+                      <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                      Load More ({filteredWords.length - visibleCount} remaining)
+                    </button>
+                  </div>
+                )}
+              </>
             ) : (
-              <WordTable />
+              <>
+                <WordTable />
+                
+                {/* Load More Button for Table View */}
+                {visibleCount < filteredWords.length && (
+                  <div className="flex justify-center mt-6">
+                    <button
+                      onClick={handleLoadMore}
+                      className="inline-flex items-center px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-xl hover:from-blue-700 hover:to-purple-700 transition-all duration-200 shadow-lg hover:shadow-xl"
+                    >
+                      <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                      Load More ({filteredWords.length - visibleCount} remaining)
+                    </button>
+                  </div>
+                )}
+              </>
             )}
           </>
         )}
