@@ -32,6 +32,10 @@ const SetViewer = ({
   const [notification, setNotification] = useState(null);
   const [showNotification, setShowNotification] = useState(false);
   
+  // Delete word confirmation
+  const [wordToDelete, setWordToDelete] = useState(null);
+  const [showDeleteWordConfirm, setShowDeleteWordConfirm] = useState(false);
+  
   // Pagination state
   const [visibleCount, setVisibleCount] = useState(30);
   const CARDS_PER_PAGE = 30;
@@ -335,6 +339,14 @@ const SetViewer = ({
 
   const deleteWord = (index) => {
     const word = set.words[index];
+    setWordToDelete({ word, index });
+    setShowDeleteWordConfirm(true);
+  };
+
+  const confirmDeleteWord = () => {
+    if (!wordToDelete) return;
+    
+    const { word, index } = wordToDelete;
     
     // If deleting a card that was being created, reset the creation state
     if (isCreatingNewCard && index === 0) {
@@ -352,6 +364,15 @@ const SetViewer = ({
       const updatedWords = set.words.filter((_, i) => i !== index);
       onUpdateSet({ ...set, words: updatedWords });
     }
+    
+    // Close confirmation
+    setShowDeleteWordConfirm(false);
+    setWordToDelete(null);
+  };
+
+  const cancelDeleteWord = () => {
+    setShowDeleteWordConfirm(false);
+    setWordToDelete(null);
   };
 
   const addNewWord = () => {
@@ -1480,6 +1501,49 @@ const SetViewer = ({
                   className="flex-1 px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors"
                 >
                   Discard Changes
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Word Confirmation Modal */}
+      {showDeleteWordConfirm && wordToDelete && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full">
+            <div className="p-6">
+              <div className="flex items-center space-x-3 mb-4">
+                <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center">
+                  <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900">Delete Word</h3>
+                  <p className="text-sm text-gray-600 mt-1">Are you sure?</p>
+                </div>
+              </div>
+              
+              <p className="text-gray-600 mb-2">
+                Do you want to delete the word <span className="font-semibold text-gray-900">"{wordToDelete.word.word || 'Untitled'}"</span>?
+              </p>
+              <p className="text-sm text-gray-500 mb-6">
+                This action cannot be undone.
+              </p>
+              
+              <div className="flex space-x-3">
+                <button
+                  onClick={cancelDeleteWord}
+                  className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmDeleteWord}
+                  className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+                >
+                  Delete
                 </button>
               </div>
             </div>
