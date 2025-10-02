@@ -2,13 +2,55 @@ import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import BackToTop from './BackToTop';
 
 const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateGroup }) => {
-  const [title, setTitle] = useState(set?.name || 'New Set');
-  const [words, setWords] = useState(set?.words ? set.words.join('\n') : '');
-  const [sourceLanguage, setSourceLanguage] = useState('Auto-detect');
-  const [targetLanguage, setTargetLanguage] = useState('English');
+  // Initialize from localStorage backup if available
+  const [title, setTitle] = useState(() => {
+    const backup = localStorage.getItem('editorBackup');
+    if (backup) {
+      const parsed = JSON.parse(backup);
+      return parsed.title || set?.name || 'New Set';
+    }
+    return set?.name || 'New Set';
+  });
+  
+  const [words, setWords] = useState(() => {
+    const backup = localStorage.getItem('editorBackup');
+    if (backup) {
+      const parsed = JSON.parse(backup);
+      return parsed.words || (set?.words ? set.words.join('\n') : '');
+    }
+    return set?.words ? set.words.join('\n') : '';
+  });
+  
+  const [sourceLanguage, setSourceLanguage] = useState(() => {
+    const backup = localStorage.getItem('editorBackup');
+    if (backup) {
+      const parsed = JSON.parse(backup);
+      return parsed.sourceLanguage || 'Auto-detect';
+    }
+    return 'Auto-detect';
+  });
+  
+  const [targetLanguage, setTargetLanguage] = useState(() => {
+    const backup = localStorage.getItem('editorBackup');
+    if (backup) {
+      const parsed = JSON.parse(backup);
+      return parsed.targetLanguage || 'English';
+    }
+    return 'English';
+  });
+  
   const [sourceDropdownOpen, setSourceDropdownOpen] = useState(false);
   const [targetDropdownOpen, setTargetDropdownOpen] = useState(false);
-  const [selectedGroupId, setSelectedGroupId] = useState(groups.length > 0 ? groups[0].id : null);
+  
+  const [selectedGroupId, setSelectedGroupId] = useState(() => {
+    const backup = localStorage.getItem('editorBackup');
+    if (backup) {
+      const parsed = JSON.parse(backup);
+      return parsed.selectedGroupId || (groups.length > 0 ? groups[0].id : null);
+    }
+    return groups.length > 0 ? groups[0].id : null;
+  });
+  
   const [groupDropdownOpen, setGroupDropdownOpen] = useState(false);
   
   // Unsaved changes tracking
@@ -16,6 +58,7 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
   const [originalSet, setOriginalSet] = useState(null);
   const [showUnsavedChangesModal, setShowUnsavedChangesModal] = useState(false);
   const [pendingAction, setPendingAction] = useState(null);
+  const [showBackupRestored, setShowBackupRestored] = useState(false);
   
   const sourceDropdownRef = useRef(null);
   const targetDropdownRef = useRef(null);
@@ -23,6 +66,40 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
   
   // Cache for change detection to avoid expensive JSON.stringify on every render
   const originalSetHash = useRef(null);
+  
+  // Show notification if backup was restored
+  useEffect(() => {
+    const backup = localStorage.getItem('editorBackup');
+    if (backup) {
+      const parsed = JSON.parse(backup);
+      const timestamp = parsed.timestamp;
+      const now = Date.now();
+      const fiveMinutes = 5 * 60 * 1000;
+      
+      // Check if backup is actually different from current props
+      const isDifferent = parsed.title !== (set?.name || 'New Set') ||
+                          parsed.words !== (set?.words ? set.words.join('\n') : '');
+      
+      // Only show notification if backup is recent (within 5 minutes) AND different
+      if (timestamp && (now - timestamp) < fiveMinutes && isDifferent) {
+        setShowBackupRestored(true);
+        setTimeout(() => setShowBackupRestored(false), 5000);
+      }
+    }
+  }, []); // Empty dependency - only run once on mount
+  
+  // Auto-save to localStorage
+  useEffect(() => {
+    const backup = {
+      title,
+      words,
+      sourceLanguage,
+      targetLanguage,
+      selectedGroupId,
+      timestamp: Date.now()
+    };
+    localStorage.setItem('editorBackup', JSON.stringify(backup));
+  }, [title, words, sourceLanguage, targetLanguage, selectedGroupId]);
 
   const languages = ['Spanish', 'French', 'German', 'English', 'Auto-detect'];
   
@@ -135,6 +212,9 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
         onSaveSet({ name: title, words: wordsArray }, selectedGroupId);
       }
       
+      // DON'T clear backup here - let the upload process handle it
+      // This allows user to go back to editor if upload fails
+      
       // Update original set to reflect saved state
       const savedSet = {
         name: title,
@@ -149,6 +229,8 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
 
   const handleConfirmUnsavedChanges = () => {
     if (pendingAction === 'back') {
+      // Clear backup when user confirms leaving without saving
+      localStorage.removeItem('editorBackup');
       onBack();
     }
     setShowUnsavedChangesModal(false);
@@ -158,6 +240,12 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
   const handleCancelUnsavedChanges = () => {
     setShowUnsavedChangesModal(false);
     setPendingAction(null);
+  };
+  
+  const handleDismissBackupNotification = () => {
+    setShowBackupRestored(false);
+    // Optionally clear the backup when user dismisses
+    // localStorage.removeItem('editorBackup');
   };
 
   // Mock enriched word data
@@ -170,6 +258,31 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50">
+      {/* Backup Restored Notification */}
+      {showBackupRestored && (
+        <div className="fixed top-4 left-1/2 transform -translate-x-1/2 z-50 animate-slide-down max-w-lg">
+          <div className="bg-green-50 border-2 border-green-200 text-green-800 px-6 py-3 rounded-xl shadow-lg flex items-center justify-between space-x-4">
+            <div className="flex items-center space-x-3">
+              <svg className="w-6 h-6 text-green-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span className="font-medium">
+                Your work was automatically restored from backup!
+              </span>
+            </div>
+            <button
+              onClick={handleDismissBackupNotification}
+              className="flex-shrink-0 text-green-600 hover:text-green-800 transition-colors"
+              title="Dismiss"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      )}
+      
       {/* Sticky Header */}
       <div className="sticky top-0 z-40 bg-white/70 backdrop-blur-md border-b border-gray-200/30">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6">

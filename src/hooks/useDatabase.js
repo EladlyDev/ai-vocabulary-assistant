@@ -164,6 +164,7 @@ export const useSets = () => {
   return useQuery({
     queryKey: ['sets'],
     queryFn: fetchSets,
+    staleTime: 0, // Always consider data stale for immediate refetch on invalidation
   });
 };
 

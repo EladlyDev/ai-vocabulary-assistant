@@ -27,7 +27,7 @@ const Dashboard = ({ onCreateNewSet, onOpenSet, groups, mockSets, onCreateGroup,
 
   // Calculate total sets and words from groups
   const totalSets = mockSets ? mockSets.length : 0;
-  const totalWords = mockSets ? mockSets.reduce((total, set) => total + (set.word_count || set.words?.length || 0), 0) : 0;
+  const totalWords = mockSets ? mockSets.reduce((total, set) => total + (set.word_count || 0), 0) : 0;
 
   const handleLogout = async () => {
     await signOut();
@@ -195,15 +195,11 @@ const Dashboard = ({ onCreateNewSet, onOpenSet, groups, mockSets, onCreateGroup,
       const deletedSet = setToDelete;
       onDeleteSet(setToDelete.id);
       
-      // Show notification with undo functionality
+      // Show notification without undo (user already confirmed deletion)
       showNotificationMessage(
         `"${deletedSet.name}" deleted successfully`, 
-        'success',
-        () => {
-          // Undo action - this would need to be implemented in the parent component
-          // For now, just show that undo was called
-          showNotificationMessage(`Undo: "${deletedSet.name}" restored`, 'success');
-        }
+        'success'
+        // No undo callback - user already confirmed the deletion
       );
       
       setShowDeleteSetModal(false);
@@ -599,14 +595,14 @@ const Dashboard = ({ onCreateNewSet, onOpenSet, groups, mockSets, onCreateGroup,
                         <div className="min-w-0 flex-1">
                           <h2 className="text-lg sm:text-2xl font-bold text-gray-900 text-left truncate">{group.name}</h2>
                           <p className="text-xs sm:text-sm text-gray-500 text-left">
-                            {group.sets.length} set{group.sets.length !== 1 ? 's' : ''} • {group.sets.reduce((total, set) => total + (set.word_count || set.words?.length || 0), 0)} words
+                            {group.sets.length} set{group.sets.length !== 1 ? 's' : ''} • {group.sets.reduce((total, set) => total + (set.word_count || 0), 0)} words
                           </p>
                         </div>
                       </div>
                       
                       <div className="flex items-center space-x-1 sm:space-x-3 flex-shrink-0">
                         <div className={`text-xs sm:text-sm text-white bg-gradient-to-r ${getGroupColor(group.color)} px-2 sm:px-3 py-1 rounded-full hidden sm:block`}>
-                          {group.sets.reduce((total, set) => total + (set.word_count || set.words?.length || 0), 0)} total words
+                          {group.sets.reduce((total, set) => total + (set.word_count || 0), 0)} total words
                         </div>
                         <svg 
                           className={`w-5 h-5 sm:w-6 sm:h-6 text-gray-400 transition-transform duration-300 ${
@@ -730,7 +726,7 @@ const Dashboard = ({ onCreateNewSet, onOpenSet, groups, mockSets, onCreateGroup,
                                           </h3>
                                           <div className="flex flex-col sm:flex-row sm:items-center sm:space-x-2 mt-1 space-y-1 sm:space-y-0">
                                             <p className="text-xs text-gray-600">
-                                              {(set.word_count || set.words?.length || 0)} word{(set.word_count || set.words?.length || 0) !== 1 ? 's' : ''}
+                                              {(set.word_count || 0)} word{(set.word_count || 0) !== 1 ? 's' : ''}
                                             </p>
                                             {/* Preview words - responsive layout */}
                                             {(set.word_count || set.words?.length || 0) > 0 && set.words && (

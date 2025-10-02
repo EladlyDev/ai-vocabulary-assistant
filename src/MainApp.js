@@ -27,6 +27,10 @@ function App() {
   // Fetch data from database
   const { data: groupsData = [], isLoading: groupsLoading, error: groupsError } = useGroups();
   const { data: setsData = [], isLoading: setsLoading, error: setsError } = useSets();
+  
+  // Combined loading state
+  const isLoading = groupsLoading || setsLoading;
+  const error = groupsError || setsError;
 
   // Mutations
   const createGroupMutation = useCreateGroup();
@@ -54,9 +58,9 @@ function App() {
         ...set, 
         groupId: group.id, 
         groupName: group.name,
-        words: set.words || [], // Ensure words array exists
-        // Use word_count from database if available, fallback to words array length
-        wordCount: set.word_count || (set.words?.length || 0)
+        words: set.words || [],
+        word_count: set.word_count || 0,
+        wordCount: set.word_count || 0
       }))
     );
   }, [groups]);
@@ -90,9 +94,37 @@ function App() {
   // Progress notification state
   const [progressNotification, setProgressNotification] = useState(null);
   
+  // Upload cancellation and active upload tracking
+  const uploadCancelledRef = useRef(false);
+  const uploadInProgressRef = useRef(false);
+  const hasCheckedResumeRef = useRef(false);
+  
   // Browser back confirmation state
   const [showBrowserBackConfirm, setShowBrowserBackConfirm] = useState(false);
   const pendingNavigationRef = useRef(null);
+
+  // Sync activeSet with mockSets when data updates (for real-time updates during upload)
+  useEffect(() => {
+    const activeSetId = activeSet?.id;
+    if (activeSetId && mockSets.length > 0 && currentView.name === 'viewer') {
+      const updatedSet = mockSets.find(s => s.id === activeSetId);
+      if (updatedSet && updatedSet.word_count !== activeSet.word_count) {
+        console.log(`Word count changed from ${activeSet.word_count} to ${updatedSet.word_count}, fetching fresh words`);
+        
+        // Fetch fresh words from database
+        import('./services/words').then(({ fetchWordsBySet }) => {
+          fetchWordsBySet(activeSetId).then(wordsData => {
+            setActiveSet({
+              ...updatedSet,
+              words: wordsData || []
+            });
+          }).catch(err => {
+            console.error('Failed to fetch words for sync:', err);
+          });
+        });
+      }
+    }
+  }, [mockSets]); // Only depend on mockSets to avoid infinite loops
 
   // Persist currentView and activeSet to localStorage
   useEffect(() => {
@@ -202,10 +234,6 @@ function App() {
     pendingNavigationRef.current = null;
   };
 
-  // Loading and error states
-  const isLoading = groupsLoading || setsLoading;
-  const error = groupsError || setsError;
-
   // Restore activeSet with full data on mount if returning from refresh
   useEffect(() => {
     const restoreSet = async () => {
@@ -252,6 +280,93 @@ function App() {
   useEffect(() => {
     window.scrollTo(0, 0);
   }, [currentView.name]);
+  
+  // Check for incomplete uploads on mount and auto-resume
+  useEffect(() => {
+    const checkIncompleteUpload = async () => {
+      console.log('🔍 Checking for incomplete uploads...', {
+        isLoading,
+        mockSetsLength: mockSets.length,
+        uploadInProgress: uploadInProgressRef.current,
+        hasChecked: hasCheckedResumeRef.current
+      });
+      
+      // Only check once when data is loaded and no upload is in progress
+      if (isLoading || !mockSets.length || uploadInProgressRef.current) {
+        return;
+      }
+      
+      const uploadQueue = localStorage.getItem('uploadQueue');
+      if (!uploadQueue) {
+        hasCheckedResumeRef.current = true;
+        console.log('✅ No upload queue found');
+        return;
+      }
+      
+      // If we've already checked and there's still a queue, it means we're resuming
+      // Don't block subsequent checks
+      if (hasCheckedResumeRef.current) {
+        console.log('⚠️ Already checked, skipping');
+        return;
+      }
+      
+      hasCheckedResumeRef.current = true;
+      
+      console.log('📦 Found upload queue, checking...');
+      
+      const queueData = JSON.parse(uploadQueue);
+      const timeSinceStart = Date.now() - queueData.timestamp;
+      const oneHour = 60 * 60 * 1000;
+      
+      // Only resume if less than 1 hour old
+      if (timeSinceStart >= oneHour) {
+        console.log('Upload queue too old, clearing...');
+        localStorage.removeItem('uploadQueue');
+        return;
+      }
+      
+      // Check if there are any unuploaded words
+      const unuploadedWords = queueData.words.filter(w => !w.uploaded);
+      if (unuploadedWords.length === 0) {
+        console.log('All words uploaded, clearing queue');
+        localStorage.removeItem('uploadQueue');
+        localStorage.removeItem('editorBackup');
+        return;
+      }
+      
+      console.log(`Detected incomplete upload: ${unuploadedWords.length} words remaining`);
+      
+      // Find the set
+      const selectedSet = mockSets.find(set => set.id === queueData.setId);
+      if (!selectedSet) {
+        console.log('Set not found, clearing queue');
+        localStorage.removeItem('uploadQueue');
+        return;
+      }
+      
+      // Fetch current words from database
+      try {
+        const { fetchWordsBySet } = await import('./services/words');
+        const currentWords = await fetchWordsBySet(queueData.setId);
+        
+        // Update activeSet but DON'T change the view - let user stay where they are
+        setActiveSet({
+          ...selectedSet,
+          words: currentWords || [],
+          groupId: selectedSet.group_id,
+          groupName: groups.find(g => g.id === selectedSet.group_id)?.name || ''
+        });
+        
+        // Resume the upload in background
+        resumeUploadFromQueue(queueData, currentWords || []);
+      } catch (err) {
+        console.error('Failed to resume upload:', err);
+      }
+    };
+    
+    // Run once after data is loaded
+    checkIncompleteUpload();
+  }, [isLoading, mockSets, groups]); // Run when data is loaded
 
   const handleCreateNewSet = () => {
     setActiveSet({ name: 'New Set', words: [] });
@@ -291,6 +406,19 @@ function App() {
   };
 
   const handleDeleteSet = (setId) => {
+    // Check if there's an ongoing upload for this set
+    const uploadQueue = localStorage.getItem('uploadQueue');
+    if (uploadQueue) {
+      const queueData = JSON.parse(uploadQueue);
+      if (queueData.setId === setId) {
+        console.log('Cancelling ongoing upload for deleted set');
+        uploadCancelledRef.current = true;
+        localStorage.removeItem('uploadQueue');
+        localStorage.removeItem('editorBackup');
+        setProgressNotification(null);
+      }
+    }
+    
     // Use mutate for instant UI updates
     deleteSetMutation.mutate(
       setId,
@@ -378,6 +506,201 @@ function App() {
       }
     );
   };
+  
+  // Cancel upload function
+  const handleCancelUpload = () => {
+    console.log('Upload cancelled by user');
+    uploadCancelledRef.current = true;
+    uploadInProgressRef.current = false;
+    
+    // Clear queue and backup
+    localStorage.removeItem('uploadQueue');
+    localStorage.removeItem('editorBackup');
+    
+    // Hide progress notification immediately
+    setProgressNotification(null);
+  };
+
+  // Resume upload from queue
+  const resumeUploadFromQueue = async (queueData, currentWords) => {
+    // Prevent multiple simultaneous uploads
+    if (uploadInProgressRef.current) {
+      console.log('Upload already in progress, skipping duplicate start');
+      return;
+    }
+    
+    uploadInProgressRef.current = true;
+    uploadCancelledRef.current = false; // Reset cancel flag
+    console.log('Resuming upload from queue');
+    
+    // Read fresh queue data from localStorage
+    let currentQueue = JSON.parse(localStorage.getItem('uploadQueue'));
+    if (!currentQueue) {
+      console.log('No queue found, stopping');
+      uploadInProgressRef.current = false;
+      return;
+    }
+    
+    // Filter out already uploaded words
+    const unuploadedWords = currentQueue.words.filter(w => !w.uploaded);
+    const uploadedCount = currentQueue.words.filter(w => w.uploaded).length;
+    
+    if (unuploadedWords.length === 0) {
+      console.log('All words uploaded');
+      localStorage.removeItem('uploadQueue');
+      localStorage.removeItem('editorBackup');
+      uploadInProgressRef.current = false;
+      return;
+    }
+    
+    console.log(`Resuming: ${uploadedCount} uploaded, ${unuploadedWords.length} remaining`);
+    
+    // Parse unuploaded words for creation
+    const wordsToCreate = unuploadedWords.map(queueWord => ({
+      set_id: currentQueue.setId,
+      word: queueWord.word,
+      translation: queueWord.translation,
+      sentence: null,
+      sentence_translation: null,
+      example: null,
+      image_url: null,
+      pronunciation: null,
+      synonyms: [],
+      antonyms: [],
+      tags: []
+    }));
+    
+    // Create batches
+    const batchSize = 10;
+    const batches = [];
+    for (let i = 0; i < wordsToCreate.length; i += batchSize) {
+      batches.push(wordsToCreate.slice(i, i + batchSize));
+    }
+    
+    const startTime = Date.now();
+    
+    // Show progress notification using uploaded count from queue
+    setProgressNotification({
+      total: currentQueue.totalWords,
+      current: uploadedCount,
+      message: `Resuming upload... (${uploadedCount}/${currentQueue.totalWords})`
+    });
+    
+    // Process batches
+    const processBatches = async () => {
+      let currentQueue; // Declare here so it's accessible throughout the loop
+      
+      for (let i = 0; i < batches.length; i++) {
+        // Check if upload was cancelled
+        if (uploadCancelledRef.current) {
+          console.log('Upload cancelled, stopping batch processing');
+          uploadCancelledRef.current = false; // Reset flag
+          uploadInProgressRef.current = false; // Mark upload as complete
+          return;
+        }
+        
+        const batch = batches[i];
+        console.log(`Processing batch ${i + 1}/${batches.length}...`);
+        
+        try {
+          // CRITICAL: Read fresh queue from localStorage BEFORE processing
+          currentQueue = JSON.parse(localStorage.getItem('uploadQueue'));
+          if (!currentQueue) {
+            console.log('Queue was cleared, stopping upload');
+            return;
+          }
+          
+          // Count uploaded words for progress display
+          const uploadedCount = currentQueue.words.filter(w => w.uploaded).length;
+          
+          const batchPromises = batch.map(wordData =>
+            createWordMutation.mutateAsync(wordData).catch(err => {
+              console.error('Failed to create word:', wordData.word, err);
+              return null;
+            })
+          );
+          
+          const results = await Promise.all(batchPromises);
+          const successfulWords = results.filter(r => r !== null);
+          
+          // Read fresh queue again after upload
+          currentQueue = JSON.parse(localStorage.getItem('uploadQueue'));
+          if (!currentQueue) {
+            console.log('Queue was cleared, stopping upload');
+            return;
+          }
+          
+          // Update queue - mark words as uploaded
+          successfulWords.forEach(wordResult => {
+            const queueItem = currentQueue.words.find(w => 
+              w.word === wordResult.word && !w.uploaded
+            );
+            if (queueItem) {
+              queueItem.uploaded = true;
+              queueItem.wordId = wordResult.id;
+            }
+          });
+          
+          // Save updated queue back to localStorage
+          localStorage.setItem('uploadQueue', JSON.stringify(currentQueue));
+          
+          // Refetch queries every 3 batches (30 words) for real-time UI updates
+          // DON'T refetch sets during upload - let uploadingWordsCount handle the count
+          if ((i + 1) % 3 === 0 || i === batches.length - 1) {
+            await queryClient.refetchQueries({ 
+              queryKey: ['words', currentQueue.setId],
+              type: 'active'
+            });
+          }
+          
+          // Update progress notification
+          setProgressNotification({
+            total: currentQueue.totalWords,
+            current: uploadedCount + batch.length,
+            message: `Adding words to your set... (${uploadedCount + batch.length}/${currentQueue.totalWords})`
+          });
+        } catch (err) {
+          console.error('Batch failed:', err);
+        }
+      }
+      
+      const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+      
+      // Read final queue state
+      const finalQueue = JSON.parse(localStorage.getItem('uploadQueue'));
+      const finalUploadedCount = finalQueue ? finalQueue.words.filter(w => w.uploaded).length : 0;
+      
+      console.log(`✓ Upload complete: ${finalUploadedCount}/${finalQueue?.totalWords || 0} words in ${duration}s`);
+      
+      // Clear upload queue and editor backup
+      localStorage.removeItem('uploadQueue');
+      localStorage.removeItem('editorBackup');
+      
+      // Mark upload as complete
+      uploadInProgressRef.current = false;
+      
+      // Final invalidation to refresh the set data with accurate counts
+      queryClient.invalidateQueries({ 
+        queryKey: ['words', currentQueue.setId],
+        refetchType: 'active'
+      });
+      queryClient.invalidateQueries({ 
+        queryKey: ['sets'],
+        refetchType: 'active'
+      });
+      
+      // Hide progress notification
+      setTimeout(() => {
+        setProgressNotification(null);
+      }, 2000);
+    };
+    
+    processBatches().catch(err => {
+      console.error('Failed to resume upload:', err);
+      setProgressNotification(null);
+      uploadInProgressRef.current = false;
+    });
+  };
 
   const handleSaveNewSet = async (newSet, targetGroupId = null) => {
     if (newSet.name.trim()) {
@@ -411,6 +734,36 @@ function App() {
           name: newSet.name
         });
         console.log('Set created with ID:', createdSet.id);
+        
+        // Parse all words and create upload queue
+        const wordCount = newSet.words.filter(w => w.trim()).length;
+        const wordsQueue = newSet.words
+          .filter(wordLine => wordLine.trim())
+          .map((wordLine, index) => {
+            const parts = wordLine.split('|').map(p => p.trim());
+            const wordText = parts[0];
+            const translation = parts[1] || '';
+            
+            return {
+              id: `word_${index}`,
+              word: wordText,
+              translation: translation,
+              uploaded: false,
+              wordId: null // Will be filled after upload
+            };
+          });
+
+        // Save upload queue to localStorage
+        const uploadQueue = {
+          setId: createdSet.id,
+          setName: createdSet.name,
+          groupId: groupId,
+          timestamp: Date.now(),
+          totalWords: wordCount,
+          words: wordsQueue
+        };
+        localStorage.setItem('uploadQueue', JSON.stringify(uploadQueue));
+        console.log('Upload queue saved to localStorage');
 
         // Navigate to the newly created set immediately
         // Set it up with empty words array - they'll populate in real-time
@@ -431,7 +784,7 @@ function App() {
           const startTime = Date.now();
           
           // Parse all words first
-          const wordsToCreate = newSet.words
+          const parsedWords = newSet.words
             .filter(wordLine => wordLine.trim())
             .map(wordLine => {
               // Parse the word line - expecting format: "word|translation" or just "word"
@@ -461,8 +814,8 @@ function App() {
           // Create words in batches of 10 for better performance
           const batchSize = 10;
           const batches = [];
-          for (let i = 0; i < wordsToCreate.length; i += batchSize) {
-            batches.push(wordsToCreate.slice(i, i + batchSize));
+          for (let i = 0; i < parsedWords.length; i += batchSize) {
+            batches.push(parsedWords.slice(i, i + batchSize));
           }
 
           // Show progress notification
@@ -471,17 +824,38 @@ function App() {
             current: 0,
             message: 'Adding words to your set...'
           });
+          
+          // Mark upload as in progress BEFORE starting batches
+          uploadInProgressRef.current = true;
+          
+          // Reset cancel flag
+          uploadCancelledRef.current = false;
 
           // Process batches sequentially, but words within each batch in parallel
           const processBatches = async () => {
-            let totalCreated = 0;
-            const createdWords = [];
-            
             for (let i = 0; i < batches.length; i++) {
+              // Check if upload was cancelled
+              if (uploadCancelledRef.current) {
+                console.log('Upload cancelled, stopping batch processing');
+                uploadCancelledRef.current = false; // Reset flag
+                uploadInProgressRef.current = false; // Mark upload as complete
+                return;
+              }
+              
               const batch = batches[i];
               console.log(`Processing batch ${i + 1}/${batches.length} (${batch.length} words)...`);
               
               try {
+                // CRITICAL: Read fresh queue from localStorage BEFORE processing
+                let currentQueue = JSON.parse(localStorage.getItem('uploadQueue'));
+                if (!currentQueue) {
+                  console.log('Queue was cleared, stopping upload');
+                  return;
+                }
+                
+                // Count uploaded words for progress display
+                const uploadedCount = currentQueue.words.filter(w => w.uploaded).length;
+                
                 const batchPromises = batch.map(wordData =>
                   createWordMutation.mutateAsync(wordData).catch(err => {
                     console.error('Failed to create word:', wordData.word, err);
@@ -491,32 +865,75 @@ function App() {
                 
                 const results = await Promise.all(batchPromises);
                 const successfulWords = results.filter(r => r !== null);
-                const successCount = successfulWords.length;
-                totalCreated += successCount;
-                createdWords.push(...successfulWords);
                 
-                // Update activeSet with new words in real-time
-                setActiveSet(prev => ({
-                  ...prev,
-                  words: [...createdWords],
-                  word_count: createdWords.length
-                }));
+                // Read fresh queue again after upload
+                currentQueue = JSON.parse(localStorage.getItem('uploadQueue'));
+                if (!currentQueue) {
+                  console.log('Queue was cleared, stopping upload');
+                  return;
+                }
+                
+                // Update upload queue - mark words as uploaded
+                successfulWords.forEach(wordResult => {
+                  const queueItem = currentQueue.words.find(w => 
+                    w.word === wordResult.word && !w.uploaded
+                  );
+                  if (queueItem) {
+                    queueItem.uploaded = true;
+                    queueItem.wordId = wordResult.id;
+                  }
+                });
+                
+                // Save updated queue to localStorage
+                localStorage.setItem('uploadQueue', JSON.stringify(currentQueue));
+                
+                // Refetch queries every 3 batches (30 words) for real-time UI updates
+                // DON'T refetch sets during upload - let uploadingWordsCount handle the count
+                if ((i + 1) % 3 === 0 || i === batches.length - 1) {
+                  await queryClient.refetchQueries({ 
+                    queryKey: ['words', createdSet.id],
+                    type: 'active'
+                  });
+                }
                 
                 // Update progress notification
                 setProgressNotification({
                   total: wordCount,
-                  current: totalCreated,
-                  message: `Adding words to your set... (${totalCreated}/${wordCount})`
+                  current: uploadedCount + batch.length,
+                  message: `Adding words to your set... (${uploadedCount + batch.length}/${wordCount})`
                 });
                 
-                console.log(`Batch ${i + 1} complete: ${successCount}/${batch.length} words created`);
+                console.log(`Batch ${i + 1} complete: ${successfulWords.length}/${batch.length} words created`);
               } catch (err) {
                 console.error('Batch failed:', err);
               }
             }
             
             const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-            console.log(`✓ Created ${totalCreated}/${wordCount} words in ${duration}s`);
+            
+            // Read final queue state for completion log
+            const finalQueue = JSON.parse(localStorage.getItem('uploadQueue'));
+            const finalUploadedCount = finalQueue ? finalQueue.words.filter(w => w.uploaded).length : 0;
+            
+            console.log(`✓ Created ${finalUploadedCount}/${wordCount} words in ${duration}s`);
+            
+            // Clear upload queue - upload complete
+            localStorage.removeItem('uploadQueue');
+            // Also clear editor backup since set was created successfully
+            localStorage.removeItem('editorBackup');
+            
+            // Mark upload as complete
+            uploadInProgressRef.current = false;
+            
+            // Final invalidation to refresh UI with accurate database data
+            queryClient.invalidateQueries({ 
+              queryKey: ['words', createdSet.id],
+              refetchType: 'active'
+            });
+            queryClient.invalidateQueries({ 
+              queryKey: ['sets'],
+              refetchType: 'active'
+            });
             
             // Hide progress notification after completion
             setTimeout(() => {
@@ -524,11 +941,17 @@ function App() {
             }, 2000);
           };
 
-          // Execute batches in background
-          processBatches().catch(err => {
-            console.error('Failed to create words:', err);
-            setProgressNotification(null);
-          });
+          // Execute batches in background - use setTimeout to ensure it runs after render
+          console.log('🚀 Starting batch processing...');
+          setTimeout(() => {
+            processBatches().catch(err => {
+              console.error('❌ Failed to create words:', err);
+              setProgressNotification(null);
+              uploadInProgressRef.current = false;
+              // Keep upload queue so user can retry
+              alert('Upload failed: ' + err.message);
+            });
+          }, 100); // Small delay to ensure state is ready
         }
       } catch (err) {
         console.error('Failed to save set:', err);
@@ -715,53 +1138,79 @@ function App() {
       {progressNotification && (
         <div className="fixed bottom-4 sm:bottom-6 left-4 right-4 sm:left-1/2 sm:right-auto sm:transform sm:-translate-x-1/2 z-50 animate-slide-up">
           <div className="bg-white/90 backdrop-blur-md text-gray-800 px-4 sm:px-6 py-4 rounded-xl sm:rounded-2xl shadow-2xl border-2 border-blue-200/50 w-full sm:min-w-[380px] sm:max-w-md">
-            {/* Header with icon and message */}
-            <div className="flex items-center space-x-3 mb-3">
-              {/* Animated icon */}
-              <div className="flex-shrink-0">
-                {progressNotification.current === progressNotification.total ? (
-                  <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center">
-                    <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
-                    </svg>
-                  </div>
-                ) : (
-                  <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center">
-                    <svg className="animate-spin w-6 h-6 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                  </div>
-                )}
-              </div>
-              
-              {/* Message text */}
-              <div className="flex-1 min-w-0">
+            {progressNotification.cancelled ? (
+              /* Cancellation message */
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
+                  <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </div>
                 <p className="font-semibold text-sm sm:text-base text-gray-900">
                   {progressNotification.message}
                 </p>
-                <p className="text-xs text-gray-600 mt-0.5">
-                  {progressNotification.current} of {progressNotification.total} words
-                </p>
               </div>
-              
-              {/* Percentage badge */}
-              <div className="flex-shrink-0">
-                <div className="px-3 py-1.5 rounded-full bg-gradient-to-r from-blue-500 to-purple-500 text-white font-bold text-sm">
-                  {Math.round((progressNotification.current / progressNotification.total) * 100)}%
+            ) : (
+              <>
+                {/* Header with icon and message */}
+                <div className="flex items-center space-x-3 mb-3">
+                  {/* Animated icon */}
+                  <div className="flex-shrink-0">
+                    {progressNotification.current === progressNotification.total ? (
+                      <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center">
+                        <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                        </svg>
+                      </div>
+                    ) : (
+                      <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center">
+                        <svg className="animate-spin w-6 h-6 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                      </div>
+                    )}
+                  </div>
+                  
+                  {/* Message text */}
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-sm sm:text-base text-gray-900">
+                      {progressNotification.message}
+                    </p>
+                    <p className="text-xs text-gray-600 mt-0.5">
+                      {progressNotification.current} of {progressNotification.total} words
+                    </p>
+                  </div>
+                  
+                  {/* Percentage badge */}
+                  <div className="flex-shrink-0">
+                    <div className="px-3 py-1.5 rounded-full bg-gradient-to-r from-blue-500 to-purple-500 text-white font-bold text-sm">
+                      {Math.round((progressNotification.current / progressNotification.total) * 100)}%
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
-            
-            {/* Progress bar */}
-            <div className="w-full bg-gray-200 rounded-full h-2.5 overflow-hidden">
-              <div 
-                className="h-full bg-gradient-to-r from-blue-500 to-purple-500 rounded-full transition-all duration-300 ease-out"
-                style={{ 
-                  width: `${(progressNotification.current / progressNotification.total) * 100}%` 
-                }}
-              />
-            </div>
+                
+                {/* Progress bar */}
+                <div className="w-full bg-gray-200 rounded-full h-2.5 overflow-hidden mb-3">
+                  <div 
+                    className="h-full bg-gradient-to-r from-blue-500 to-purple-500 rounded-full transition-all duration-300 ease-out"
+                    style={{ 
+                      width: `${(progressNotification.current / progressNotification.total) * 100}%` 
+                    }}
+                  />
+                </div>
+                
+                {/* Cancel button - only show if not complete */}
+                {progressNotification.current < progressNotification.total && (
+                  <button
+                    onClick={handleCancelUpload}
+                    className="w-full py-2 px-4 bg-red-50 hover:bg-red-100 text-red-600 font-medium rounded-lg transition-colors duration-200 text-sm"
+                  >
+                    Cancel Upload
+                  </button>
+                )}
+              </>
+            )}
           </div>
         </div>
       )}
