@@ -84,7 +84,13 @@ export const useUpdateGroup = () => {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ groupId, updates }) => updateGroup(groupId, updates),
+    mutationFn: ({ groupId, updates }) => {
+      // Skip database update for temporary groups (not yet created)
+      if (groupId.toString().startsWith('temp-')) {
+        return Promise.resolve({ id: groupId, ...updates });
+      }
+      return updateGroup(groupId, updates);
+    },
     // Optimistic update
     onMutate: async ({ groupId, updates }) => {
       await queryClient.cancelQueries({ queryKey: ['groups'] });
@@ -99,15 +105,18 @@ export const useUpdateGroup = () => {
         );
       }
       
-      return { previousGroups };
+      return { previousGroups, isTempGroup: groupId.toString().startsWith('temp-') };
     },
     onError: (err, variables, context) => {
       if (context?.previousGroups) {
         queryClient.setQueryData(['groups'], context.previousGroups);
       }
     },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['groups'] });
+    onSettled: (data, error, variables, context) => {
+      // Only invalidate queries if it's a real group (not temp)
+      if (!context?.isTempGroup) {
+        queryClient.invalidateQueries({ queryKey: ['groups'] });
+      }
     },
   });
 };
@@ -119,7 +128,13 @@ export const useDeleteGroup = () => {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: deleteGroup,
+    mutationFn: (groupId) => {
+      // Skip database delete for temporary groups (not yet created)
+      if (groupId.toString().startsWith('temp-')) {
+        return Promise.resolve({ id: groupId });
+      }
+      return deleteGroup(groupId);
+    },
     // Optimistic update
     onMutate: async (groupId) => {
       await queryClient.cancelQueries({ queryKey: ['groups'] });
@@ -140,7 +155,7 @@ export const useDeleteGroup = () => {
         );
       }
       
-      return { previousGroups, previousSets };
+      return { previousGroups, previousSets, isTempGroup: groupId.toString().startsWith('temp-') };
     },
     onError: (err, variables, context) => {
       if (context?.previousGroups) {
@@ -150,9 +165,12 @@ export const useDeleteGroup = () => {
         queryClient.setQueryData(['sets'], context.previousSets);
       }
     },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['groups'] });
-      queryClient.invalidateQueries({ queryKey: ['sets'] });
+    onSettled: (data, error, variables, context) => {
+      // Only invalidate queries if it's a real group (not temp)
+      if (!context?.isTempGroup) {
+        queryClient.invalidateQueries({ queryKey: ['groups'] });
+        queryClient.invalidateQueries({ queryKey: ['sets'] });
+      }
     },
   });
 };
@@ -210,7 +228,13 @@ export const useUpdateSet = () => {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ setId, updates }) => updateSet(setId, updates),
+    mutationFn: ({ setId, updates }) => {
+      // Skip database update for temporary sets (not yet created)
+      if (setId.toString().startsWith('temp-')) {
+        return Promise.resolve({ id: setId, ...updates });
+      }
+      return updateSet(setId, updates);
+    },
     // Optimistic update
     onMutate: async ({ setId, updates }) => {
       await queryClient.cancelQueries({ queryKey: ['sets'] });
@@ -225,15 +249,18 @@ export const useUpdateSet = () => {
         );
       }
       
-      return { previousSets };
+      return { previousSets, isTempSet: setId.toString().startsWith('temp-') };
     },
     onError: (err, variables, context) => {
       if (context?.previousSets) {
         queryClient.setQueryData(['sets'], context.previousSets);
       }
     },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['sets'] });
+    onSettled: (data, error, variables, context) => {
+      // Only invalidate queries if it's a real set (not temp)
+      if (!context?.isTempSet) {
+        queryClient.invalidateQueries({ queryKey: ['sets'] });
+      }
     },
   });
 };
@@ -245,7 +272,13 @@ export const useDeleteSet = () => {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: deleteSet,
+    mutationFn: (setId) => {
+      // Skip database delete for temporary sets (not yet created)
+      if (setId.toString().startsWith('temp-')) {
+        return Promise.resolve({ id: setId });
+      }
+      return deleteSet(setId);
+    },
     // Optimistic update
     onMutate: async (setId) => {
       await queryClient.cancelQueries({ queryKey: ['sets'] });
@@ -258,16 +291,19 @@ export const useDeleteSet = () => {
         );
       }
       
-      return { previousSets };
+      return { previousSets, isTempSet: setId.toString().startsWith('temp-') };
     },
     onError: (err, variables, context) => {
       if (context?.previousSets) {
         queryClient.setQueryData(['sets'], context.previousSets);
       }
     },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['sets'] });
-      queryClient.invalidateQueries({ queryKey: ['words'] });
+    onSettled: (data, error, variables, context) => {
+      // Only invalidate queries if it's a real set (not temp)
+      if (!context?.isTempSet) {
+        queryClient.invalidateQueries({ queryKey: ['sets'] });
+        queryClient.invalidateQueries({ queryKey: ['words'] });
+      }
     },
   });
 };
