@@ -62,6 +62,9 @@ function App() {
   const [activeSet, setActiveSet] = useState(null);
   const [viewMode, setViewMode] = useState(localStorage.getItem('viewMode') || 'list');
   const [searchTerm, setSearchTerm] = useState('');
+  
+  // Progress notification state
+  const [progressNotification, setProgressNotification] = useState(null);
 
   // Loading and error states
   const isLoading = groupsLoading || setsLoading;
@@ -203,7 +206,7 @@ function App() {
         
         // If no target group and no groups exist, create a default group first
         if (!groupId && groups.length === 0) {
-          console.log('Creating default group...');
+          console.log('No groups exist, creating default group...');
           const newGroup = await createGroupMutation.mutateAsync({
             name: "My Vocabulary Sets",
             color: "blue"
@@ -218,19 +221,28 @@ function App() {
           console.log('Using first group:', groupId);
         }
 
-        // Create the set in database
-        console.log('Creating set in database...');
+        // Create the set first (wait for it to get real ID)
+        console.log('Creating set...');
         const createdSet = await createSetMutation.mutateAsync({
           group_id: groupId,
           name: newSet.name
         });
-        console.log('Set created:', createdSet);
+        console.log('Set created with ID:', createdSet.id);
 
-        // Create words if any - use Promise.all for parallel creation
+        // Navigate to dashboard immediately after set is created
+        // (don't wait for words - they'll populate in background)
+        console.log('Navigating to dashboard...');
+        setCurrentView({ name: 'dashboard' });
+        setActiveSet(null);
+
+        // Create words in background if any - use batched parallel execution
         if (newSet.words && newSet.words.length > 0) {
-          console.log('Creating words:', newSet.words.length);
+          const wordCount = newSet.words.filter(w => w.trim()).length;
+          console.log('Creating', wordCount, 'words in batches...');
+          const startTime = Date.now();
+          
           // Parse all words first
-          const wordPromises = newSet.words
+          const wordsToCreate = newSet.words
             .filter(wordLine => wordLine.trim())
             .map(wordLine => {
               // Parse the word line - expecting format: "word|translation" or just "word"
@@ -239,7 +251,7 @@ function App() {
               const translation = parts[1] || '';
               
               if (wordText) {
-                return createWordMutation.mutateAsync({
+                return {
                   set_id: createdSet.id,
                   word: wordText,
                   translation: translation,
@@ -251,20 +263,73 @@ function App() {
                   synonyms: [],
                   antonyms: [],
                   tags: []
-                });
+                };
               }
               return null;
             })
             .filter(Boolean);
 
-          // Create all words in parallel for better performance
-          await Promise.all(wordPromises);
-          console.log('Words created successfully');
-        }
+          // Create words in batches of 10 for better performance
+          const batchSize = 10;
+          const batches = [];
+          for (let i = 0; i < wordsToCreate.length; i += batchSize) {
+            batches.push(wordsToCreate.slice(i, i + batchSize));
+          }
 
-        console.log('Navigating to dashboard...');
-        setCurrentView({ name: 'dashboard' });
-        setActiveSet(null);
+          // Show progress notification
+          setProgressNotification({
+            total: wordCount,
+            current: 0,
+            message: 'Creating words...'
+          });
+
+          // Process batches sequentially, but words within each batch in parallel
+          const processBatches = async () => {
+            let totalCreated = 0;
+            for (let i = 0; i < batches.length; i++) {
+              const batch = batches[i];
+              console.log(`Processing batch ${i + 1}/${batches.length} (${batch.length} words)...`);
+              
+              try {
+                const batchPromises = batch.map(wordData =>
+                  createWordMutation.mutateAsync(wordData).catch(err => {
+                    console.error('Failed to create word:', wordData.word, err);
+                    return null;
+                  })
+                );
+                
+                const results = await Promise.all(batchPromises);
+                const successCount = results.filter(r => r !== null).length;
+                totalCreated += successCount;
+                
+                // Update progress notification
+                setProgressNotification({
+                  total: wordCount,
+                  current: totalCreated,
+                  message: `Creating words... (${totalCreated}/${wordCount})`
+                });
+                
+                console.log(`Batch ${i + 1} complete: ${successCount}/${batch.length} words created`);
+              } catch (err) {
+                console.error('Batch failed:', err);
+              }
+            }
+            
+            const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+            console.log(`✓ Created ${totalCreated}/${wordCount} words in ${duration}s`);
+            
+            // Hide progress notification after completion
+            setTimeout(() => {
+              setProgressNotification(null);
+            }, 2000);
+          };
+
+          // Execute batches in background
+          processBatches().catch(err => {
+            console.error('Failed to create words:', err);
+            setProgressNotification(null);
+          });
+        }
       } catch (err) {
         console.error('Failed to save set:', err);
         alert('Failed to save set. Please try again.');
@@ -292,18 +357,20 @@ function App() {
     // Special case for reordering groups
     if (groupId === 'reorder' && Array.isArray(updatedData)) {
       try {
+        // Optimistically update the UI immediately
+        queryClient.setQueryData(['groups'], updatedData);
+        
         // Import the updateGroupsOrder function
         const { updateGroupsOrder } = await import('./services/groups');
         
-        // Update all groups with their new display_order
+        // Update all groups with their new display_order in background
         await updateGroupsOrder(updatedData);
-        
-        // Invalidate and refetch groups immediately
-        await queryClient.invalidateQueries({ queryKey: ['groups'] });
         
         console.log('Groups reordered successfully!');
       } catch (err) {
         console.error('Failed to reorder groups:', err);
+        // Refetch on error to restore correct state
+        await queryClient.refetchQueries({ queryKey: ['groups'] });
         alert('Failed to save group order. Please try again.');
       }
       return;
@@ -439,6 +506,61 @@ function App() {
           isUpdatingWord={updateWordMutation.isPending}
           isDeletingWord={deleteWordMutation.isPending}
         />
+      )}
+      
+      {/* Progress Notification Toast */}
+      {progressNotification && (
+        <div className="fixed bottom-4 sm:bottom-6 left-4 right-4 sm:left-1/2 sm:right-auto sm:transform sm:-translate-x-1/2 z-50 animate-slide-up">
+          <div className="bg-white/90 backdrop-blur-md text-gray-800 px-4 sm:px-6 py-4 rounded-xl sm:rounded-2xl shadow-2xl border-2 border-blue-200/50 w-full sm:min-w-[380px] sm:max-w-md">
+            {/* Header with icon and message */}
+            <div className="flex items-center space-x-3 mb-3">
+              {/* Animated icon */}
+              <div className="flex-shrink-0">
+                {progressNotification.current === progressNotification.total ? (
+                  <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center">
+                    <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                    </svg>
+                  </div>
+                ) : (
+                  <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center">
+                    <svg className="animate-spin w-6 h-6 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                  </div>
+                )}
+              </div>
+              
+              {/* Message text */}
+              <div className="flex-1 min-w-0">
+                <p className="font-semibold text-sm sm:text-base text-gray-900">
+                  {progressNotification.message}
+                </p>
+                <p className="text-xs text-gray-600 mt-0.5">
+                  {progressNotification.current} of {progressNotification.total} words
+                </p>
+              </div>
+              
+              {/* Percentage badge */}
+              <div className="flex-shrink-0">
+                <div className="px-3 py-1.5 rounded-full bg-gradient-to-r from-blue-500 to-purple-500 text-white font-bold text-sm">
+                  {Math.round((progressNotification.current / progressNotification.total) * 100)}%
+                </div>
+              </div>
+            </div>
+            
+            {/* Progress bar */}
+            <div className="w-full bg-gray-200 rounded-full h-2.5 overflow-hidden">
+              <div 
+                className="h-full bg-gradient-to-r from-blue-500 to-purple-500 rounded-full transition-all duration-300 ease-out"
+                style={{ 
+                  width: `${(progressNotification.current / progressNotification.total) * 100}%` 
+                }}
+              />
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -36,12 +36,43 @@ export const useCreateGroup = () => {
 
   return useMutation({
     mutationFn: createGroup,
-    onSuccess: async (data) => {
-      // Force immediate refetch of groups
-      await queryClient.refetchQueries({ queryKey: ['groups'] });
+    onMutate: async (newGroup) => {
+      // Cancel outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['groups'] });
+      
+      // Snapshot previous value
+      const previousGroups = queryClient.getQueryData(['groups']);
+      
+      // Optimistically update with temporary group
+      const tempGroup = {
+        ...newGroup,
+        id: `temp-${Date.now()}`,
+        order_index: previousGroups ? previousGroups.length : 0,
+        sets: []
+      };
+      
+      if (previousGroups) {
+        queryClient.setQueryData(['groups'], [...previousGroups, tempGroup]);
+      }
+      
+      return { previousGroups, tempGroup };
     },
-    onError: (err) => {
+    onSuccess: (data, variables, context) => {
+      // Replace temp group with real data
+      const previousGroups = queryClient.getQueryData(['groups']);
+      if (previousGroups && context?.tempGroup) {
+        const updatedGroups = previousGroups.map(g => 
+          g.id === context.tempGroup.id ? data : g
+        );
+        queryClient.setQueryData(['groups'], updatedGroups);
+      }
+    },
+    onError: (err, variables, context) => {
       console.error('Failed to create group:', err);
+      // Rollback on error
+      if (context?.previousGroups) {
+        queryClient.setQueryData(['groups'], context.previousGroups);
+      }
     },
   });
 };
@@ -144,9 +175,26 @@ export const useCreateSet = () => {
 
   return useMutation({
     mutationFn: createSet,
-    onSuccess: async (data) => {
-      // Force immediate refetch of sets
-      await queryClient.refetchQueries({ queryKey: ['sets'] });
+    onSuccess: (data, variables) => {
+      // Immediately add the new set to the cache
+      const previousSets = queryClient.getQueryData(['sets']);
+      const previousGroups = queryClient.getQueryData(['groups']);
+      
+      // Add to sets cache
+      if (previousSets) {
+        queryClient.setQueryData(['sets'], [...previousSets, data]);
+      }
+      
+      // Add to group's sets array in cache
+      if (previousGroups && variables.group_id) {
+        queryClient.setQueryData(['groups'], 
+          previousGroups.map(g => 
+            g.id === variables.group_id 
+              ? { ...g, sets: [...(g.sets || []), data] }
+              : g
+          )
+        );
+      }
     },
     onError: (err) => {
       console.error('Failed to create set:', err);
@@ -272,6 +320,38 @@ export const useCreateWord = () => {
       
       return { previousWords, previousSets, setId };
     },
+    onSuccess: (data, variables) => {
+      const setId = variables.set_id;
+      
+      // Update words cache with real data
+      const currentWords = queryClient.getQueryData(['words', setId]);
+      if (currentWords) {
+        // Replace temp word with real word
+        queryClient.setQueryData(['words', setId], (old) =>
+          old.map((word) => 
+            word.id && word.id.toString().startsWith('temp-') ? data : word
+          ).filter((word, index, self) => 
+            // Remove duplicates based on word ID
+            index === self.findIndex((w) => w.id === word.id)
+          )
+        );
+      } else {
+        // Initialize cache if it doesn't exist
+        queryClient.setQueryData(['words', setId], [data]);
+      }
+      
+      // Update word count in sets
+      const currentSets = queryClient.getQueryData(['sets']);
+      if (currentSets) {
+        queryClient.setQueryData(['sets'], (old) =>
+          old.map((set) =>
+            set.id === setId 
+              ? { ...set, word_count: (set.word_count || 0) }
+              : set
+          )
+        );
+      }
+    },
     onError: (err, newWord, context) => {
       if (context?.previousWords) {
         queryClient.setQueryData(['words', context.setId], context.previousWords);
@@ -280,7 +360,6 @@ export const useCreateWord = () => {
         queryClient.setQueryData(['sets'], context.previousSets);
       }
     },
-    // No onSettled - rely on optimistic updates for instant UI
   });
 };
 

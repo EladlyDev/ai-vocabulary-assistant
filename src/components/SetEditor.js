@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import BackToTop from './BackToTop';
 
 const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateGroup }) => {
@@ -20,8 +20,19 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
   const sourceDropdownRef = useRef(null);
   const targetDropdownRef = useRef(null);
   const groupDropdownRef = useRef(null);
+  
+  // Cache for change detection to avoid expensive JSON.stringify on every render
+  const originalSetHash = useRef(null);
 
   const languages = ['Spanish', 'French', 'German', 'English', 'Auto-detect'];
+  
+  // Memoize parsed words array - only recalculate when words string changes
+  const wordsArray = useMemo(() => {
+    return words.split('\n').filter(word => word.trim() !== '');
+  }, [words]);
+  
+  // Memoize word count - only recalculate when wordsArray changes
+  const wordCount = useMemo(() => wordsArray.length, [wordsArray]);
 
   // Update selectedGroupId when groups change (e.g., new group created)
   useEffect(() => {
@@ -35,23 +46,34 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
     if (!originalSet) {
       const currentSet = {
         name: title,
-        words: words.split('\n').filter(word => word.trim() !== '')
+        words: wordsArray
       };
-      setOriginalSet(JSON.parse(JSON.stringify(currentSet)));
+      const clonedSet = JSON.parse(JSON.stringify(currentSet));
+      setOriginalSet(clonedSet);
+      originalSetHash.current = JSON.stringify(clonedSet);
     }
-  }, [title, words, originalSet]);
+  }, [title, wordsArray, originalSet]);
 
-  // Detect changes
+  // Optimized change detection using hash comparison
+  const checkForChanges = useCallback(() => {
+    if (!originalSet || !originalSetHash.current) return false;
+    
+    const currentSet = {
+      name: title,
+      words: wordsArray
+    };
+    const currentHash = JSON.stringify(currentSet);
+    
+    return currentHash !== originalSetHash.current;
+  }, [title, wordsArray, originalSet]);
+
+  // Detect changes with memoization
   useEffect(() => {
-    if (originalSet) {
-      const currentSet = {
-        name: title,
-        words: words.split('\n').filter(word => word.trim() !== '')
-      };
-      const hasChanges = JSON.stringify(currentSet) !== JSON.stringify(originalSet);
+    const hasChanges = checkForChanges();
+    if (hasChanges !== hasUnsavedChanges) {
       setHasUnsavedChanges(hasChanges);
     }
-  }, [title, words, originalSet]);
+  }, [checkForChanges, hasUnsavedChanges]);
 
   // Prevent navigation with unsaved changes
   useEffect(() => {
@@ -86,27 +108,26 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
     };
   }, []);
 
-  const handleTitleChange = (e) => {
+  const handleTitleChange = useCallback((e) => {
     const newTitle = e.target.value;
     setTitle(newTitle);
-  };
+  }, []);
 
-  const handleWordsChange = (e) => {
+  const handleWordsChange = useCallback((e) => {
     const newWords = e.target.value;
     setWords(newWords);
-  };
+  }, []);
 
-  const handleBack = () => {
+  const handleBack = useCallback(() => {
     if (hasUnsavedChanges) {
       setPendingAction('back');
       setShowUnsavedChangesModal(true);
     } else {
       onBack();
     }
-  };
+  }, [hasUnsavedChanges, onBack]);
 
   const handleSaveChanges = () => {
-    const wordsArray = words.split('\n').filter(word => word.trim() !== '');
     if (title.trim() && wordsArray.length > 0) {
       if (set?.id) {
         onUpdateSet({ ...set, name: title, words: wordsArray });
@@ -119,7 +140,9 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
         name: title,
         words: wordsArray
       };
-      setOriginalSet(JSON.parse(JSON.stringify(savedSet)));
+      const clonedSet = JSON.parse(JSON.stringify(savedSet));
+      setOriginalSet(clonedSet);
+      originalSetHash.current = JSON.stringify(clonedSet);
       setHasUnsavedChanges(false);
     }
   };
@@ -169,7 +192,7 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
                   {set?.id ? 'Edit Vocabulary Set' : 'Create New Vocabulary Set'}
                 </h1>
                 <p className="text-sm sm:text-base text-gray-600 mt-1">
-                  {words.split('\n').filter(word => word.trim()).length} words
+                  {wordCount} words
                   {set?.id ? ' (editing)' : ' (new set)'}
                 </p>
               </div>
@@ -433,7 +456,7 @@ leer"
                 className="w-full h-48 p-4 border-2 border-gray-200 rounded-xl resize-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 hover:border-gray-300 text-gray-700 placeholder-gray-400"
               />
               <div className="absolute bottom-3 right-3 text-xs text-gray-400 bg-white/90 px-2 py-1 rounded-lg backdrop-blur-sm">
-                {words.split('\n').filter(word => word.trim()).length} words
+                {wordCount} words
               </div>
             </div>
             

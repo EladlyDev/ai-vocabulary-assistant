@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import ExportModal from './ExportModal';
 import BackToTop from './BackToTop';
 
@@ -31,41 +31,89 @@ const SetViewer = ({
   const newCardRef = useRef(null); // Reference to scroll to new card
   const [notification, setNotification] = useState(null);
   const [showNotification, setShowNotification] = useState(false);
+  
+  // Cache for set serialization to avoid expensive JSON.stringify on every render
+  const setHash = useRef(null);
+  const originalSetHash = useRef(null);
+  
+  // Debounce timer for database updates
+  const updateTimerRef = useRef(null);
 
   // Track original state for change detection
   useEffect(() => {
     if (!originalSet) {
-      setOriginalSet(JSON.parse(JSON.stringify(set)));
+      const clonedSet = JSON.parse(JSON.stringify(set));
+      setOriginalSet(clonedSet);
+      originalSetHash.current = JSON.stringify(clonedSet);
     }
   }, [set, originalSet]);
 
-  // Detect changes
-  useEffect(() => {
-    if (originalSet) {
-      // If we're creating a new card, check if it has any data
-      if (isCreatingNewCard && set.words.length > 0) {
-        const newCard = set.words[0];
-        const wordObj = typeof newCard === 'string' ? { word: newCard } : newCard;
-        
-        // Check if the new card has any meaningful data
-        const hasData = (wordObj.word && wordObj.word.trim() !== '') ||
-                       (wordObj.translation && wordObj.translation.trim() !== '') ||
-                       (wordObj.sentence && wordObj.sentence.trim() !== '') ||
-                       (wordObj.sentenceTranslation && wordObj.sentenceTranslation.trim() !== '') ||
-                       (wordObj.image && wordObj.image.trim() !== '') ||
-                       (wordObj.pronunciation && wordObj.pronunciation.trim() !== '') ||
-                       (wordObj.tags && wordObj.tags.length > 0);
-        
-        // Only enable save if the new card has data OR there are other changes
-        const otherChanges = JSON.stringify(set.words.slice(1)) !== JSON.stringify(originalSet.words);
-        setHasUnsavedChanges(hasData || otherChanges);
-      } else {
-        // Normal change detection
-        const hasChanges = JSON.stringify(set) !== JSON.stringify(originalSet);
-        setHasUnsavedChanges(hasChanges);
+  // Optimized change detection using memoization
+  const checkForChanges = useCallback(() => {
+    if (!originalSet) return false;
+    
+    // Check if user is actively editing a field with a different value
+    if (editingCard !== null && editingField !== null) {
+      if (editingCard === 'setName' && editingField === 'name') {
+        // Editing set name
+        if (editingValue !== set.name) {
+          return true;
+        }
+      } else if (typeof editingCard === 'number') {
+        // Editing a word field
+        const word = set.words[editingCard];
+        if (word) {
+          const wordObj = typeof word === 'string' ? { word } : word;
+          const currentValue = wordObj[editingField];
+          const normalizedCurrent = currentValue || '';
+          const normalizedEditing = editingValue || '';
+          
+          // If actively editing with different value, there are unsaved changes
+          if (normalizedEditing !== normalizedCurrent) {
+            return true;
+          }
+        }
       }
+      // If we reach here, user is editing but value matches current - no changes yet
+      // Fall through to check if there are other saved changes
     }
-  }, [set, originalSet, isCreatingNewCard]);
+    
+    // If we're creating a new card, check if it has any data
+    if (isCreatingNewCard && set.words.length > 0) {
+      const newCard = set.words[0];
+      const wordObj = typeof newCard === 'string' ? { word: newCard } : newCard;
+      
+      // Check if the new card has any meaningful data
+      const hasData = (wordObj.word && wordObj.word.trim() !== '') ||
+                     (wordObj.translation && wordObj.translation.trim() !== '') ||
+                     (wordObj.sentence && wordObj.sentence.trim() !== '') ||
+                     (wordObj.sentenceTranslation && wordObj.sentenceTranslation.trim() !== '') ||
+                     (wordObj.image && wordObj.image.trim() !== '') ||
+                     (wordObj.pronunciation && wordObj.pronunciation.trim() !== '') ||
+                     (wordObj.tags && wordObj.tags.length > 0);
+      
+      return hasData;
+    }
+    
+    // Check if the set has changed from its original state
+    // Use cached hash comparison for better performance
+    const currentHash = JSON.stringify(set);
+    if (setHash.current !== currentHash) {
+      setHash.current = currentHash;
+      return currentHash !== originalSetHash.current;
+    }
+    
+    // No changes detected
+    return false;
+  }, [set, originalSet, isCreatingNewCard, editingCard, editingField, editingValue]);
+
+  // Detect changes with optimized comparison
+  useEffect(() => {
+    const hasChanges = checkForChanges();
+    if (hasChanges !== hasUnsavedChanges) {
+      setHasUnsavedChanges(hasChanges);
+    }
+  }, [set, checkForChanges, hasUnsavedChanges]);
 
   // Prevent navigation with unsaved changes
   useEffect(() => {
@@ -79,6 +127,15 @@ const SetViewer = ({
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [hasUnsavedChanges]);
+  
+  // Cleanup debounce timer on unmount
+  useEffect(() => {
+    return () => {
+      if (updateTimerRef.current) {
+        clearTimeout(updateTimerRef.current);
+      }
+    };
+  }, []);
 
   const showNotificationMessage = (message, type = 'warning') => {
     setNotification({ message, type });
@@ -246,24 +303,31 @@ const SetViewer = ({
     setShowExportModal(false);
   };
 
-  const updateWordField = (index, field, value) => {
+  const updateWordField = useCallback((index, field, value) => {
     const word = set.words[index];
     
-    // If word doesn't have an ID yet (new word not saved), just update locally
-    if (!word.id || word.id.startsWith('temp-')) {
-      const updatedWords = [...set.words];
-      if (typeof updatedWords[index] === 'string') {
-        // Convert simple string to object
-        updatedWords[index] = { word: updatedWords[index] };
-      }
-      updatedWords[index] = { ...updatedWords[index], [field]: value };
-      onUpdateSet({ ...set, words: updatedWords });
-    } else {
-      // Update in database
-      const updates = { [field]: value };
-      onUpdateWord(word.id, updates, set.id);
+    // Always update UI immediately for instant feedback
+    const updatedWords = [...set.words];
+    if (typeof updatedWords[index] === 'string') {
+      updatedWords[index] = { word: updatedWords[index] };
     }
-  };
+    updatedWords[index] = { ...updatedWords[index], [field]: value };
+    onUpdateSet({ ...set, words: updatedWords });
+    
+    // If word has an ID (exists in database), schedule database update
+    if (word.id && !word.id.startsWith('temp-')) {
+      // Clear previous timer
+      if (updateTimerRef.current) {
+        clearTimeout(updateTimerRef.current);
+      }
+      
+      // Debounce database update by 300ms
+      updateTimerRef.current = setTimeout(() => {
+        const updates = { [field]: value };
+        onUpdateWord(word.id, updates, set.id);
+      }, 300);
+    }
+  }, [set, onUpdateSet, onUpdateWord]);
 
   const deleteWord = (index) => {
     const word = set.words[index];
@@ -364,6 +428,7 @@ const SetViewer = ({
       }
     }
     
+    // Clear editing state - this will trigger change detection to re-evaluate
     setEditingCard(null);
     setEditingField(null);
     setEditingValue('');
@@ -399,17 +464,21 @@ const SetViewer = ({
     }
   };
 
-  // Filter words based on search term
-  const filteredWords = set.words.filter(word => {
-    const wordText = typeof word === 'string' ? word : word.word;
-    const translation = typeof word === 'object' ? word.translation : '';
-    const sentence = typeof word === 'object' ? word.sentence : '';
+  // Memoize filtered words to avoid re-computing on every render
+  const filteredWords = useMemo(() => {
+    if (!searchTerm) return set.words;
     
     const searchLower = searchTerm.toLowerCase();
-    return wordText.toLowerCase().includes(searchLower) ||
-           translation.toLowerCase().includes(searchLower) ||
-           sentence.toLowerCase().includes(searchLower);
-  });
+    return set.words.filter(word => {
+      const wordText = typeof word === 'string' ? word : word.word;
+      const translation = typeof word === 'object' ? word.translation : '';
+      const sentence = typeof word === 'object' ? word.sentence : '';
+      
+      return wordText.toLowerCase().includes(searchLower) ||
+             translation.toLowerCase().includes(searchLower) ||
+             sentence.toLowerCase().includes(searchLower);
+    });
+  }, [set.words, searchTerm]);
 
   const WordCard = ({ word, index, originalIndex }) => {
     const wordObj = typeof word === 'string' ? { word } : word;
