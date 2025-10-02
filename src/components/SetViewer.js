@@ -15,7 +15,8 @@ const SetViewer = ({
   searchTerm, 
   onSearchChange,
   isUpdatingWord,
-  isDeletingWord
+  isDeletingWord,
+  onUnsavedChangesChange
 }) => {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
@@ -46,6 +47,14 @@ const SetViewer = ({
   
   // Debounce timer for database updates
   const updateTimerRef = useRef(null);
+  
+  // Ref for callback to avoid dependency issues
+  const onUnsavedChangesChangeRef = useRef(onUnsavedChangesChange);
+  
+  // Update ref when callback changes
+  useEffect(() => {
+    onUnsavedChangesChangeRef.current = onUnsavedChangesChange;
+  }, [onUnsavedChangesChange]);
 
   // Track original state for change detection
   useEffect(() => {
@@ -120,6 +129,10 @@ const SetViewer = ({
     const hasChanges = checkForChanges();
     if (hasChanges !== hasUnsavedChanges) {
       setHasUnsavedChanges(hasChanges);
+      // Notify parent component about unsaved changes using ref
+      if (onUnsavedChangesChangeRef.current) {
+        onUnsavedChangesChangeRef.current(hasChanges);
+      }
     }
   }, [set, checkForChanges, hasUnsavedChanges]);
 
@@ -491,6 +504,9 @@ const SetViewer = ({
 
   // Memoize filtered words to avoid re-computing on every render
   const filteredWords = useMemo(() => {
+    // Handle case where words array doesn't exist yet (loading from localStorage)
+    if (!set.words || !Array.isArray(set.words)) return [];
+    
     if (!searchTerm) return set.words.map((word, index) => ({ word, originalIndex: index }));
     
     const searchLower = searchTerm.toLowerCase();
@@ -1087,6 +1103,18 @@ const SetViewer = ({
       </div>
     </div>
   );
+
+  // Show loading state if words array is not yet loaded
+  if (!set.words || !Array.isArray(set.words)) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mb-4"></div>
+          <p className="text-gray-600">Loading set...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50">

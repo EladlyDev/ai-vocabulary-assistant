@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import Dashboard from './components/Dashboard';
 import SetEditor from './components/SetEditor';
@@ -20,6 +20,9 @@ import {
 
 function App() {
   const queryClient = useQueryClient();
+  
+  // Ref to track unsaved changes from SetViewer
+  const hasUnsavedChangesRef = useRef(false);
   
   // Fetch data from database
   const { data: groupsData = [], isLoading: groupsLoading, error: groupsError } = useGroups();
@@ -58,17 +61,197 @@ function App() {
     );
   }, [groups]);
 
-  const [currentView, setCurrentView] = useState({ name: 'dashboard' });
-  const [activeSet, setActiveSet] = useState(null);
+  // Initialize state from localStorage or defaults
+  const [currentView, setCurrentView] = useState(() => {
+    const saved = localStorage.getItem('currentView');
+    return saved ? JSON.parse(saved) : { name: 'dashboard' };
+  });
+  
+  const [activeSet, setActiveSet] = useState(() => {
+    const saved = localStorage.getItem('activeSet');
+    // Only restore minimal data (id, name) without words to force fresh fetch
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      return {
+        id: parsed.id,
+        name: parsed.name,
+        group_id: parsed.group_id,
+        groupName: parsed.groupName,
+        word_count: parsed.word_count
+        // Intentionally not restoring words to ensure fresh data on reload
+      };
+    }
+    return null;
+  });
+  
   const [viewMode, setViewMode] = useState(localStorage.getItem('viewMode') || 'list');
   const [searchTerm, setSearchTerm] = useState('');
   
   // Progress notification state
   const [progressNotification, setProgressNotification] = useState(null);
+  
+  // Browser back confirmation state
+  const [showBrowserBackConfirm, setShowBrowserBackConfirm] = useState(false);
+  const pendingNavigationRef = useRef(null);
+
+  // Persist currentView and activeSet to localStorage
+  useEffect(() => {
+    localStorage.setItem('currentView', JSON.stringify(currentView));
+    
+    // Push state to browser history for back/forward button support
+    const state = { view: currentView.name, setId: activeSet?.id };
+    const title = currentView.name === 'dashboard' ? 'Dashboard' : 
+                  currentView.name === 'editor' ? 'New Set' :
+                  activeSet?.name || 'Set Viewer';
+    
+    // Only push state if it's different from current state
+    if (JSON.stringify(window.history.state) !== JSON.stringify(state)) {
+      window.history.pushState(state, title, window.location.pathname);
+    }
+  }, [currentView, activeSet]);
+
+  useEffect(() => {
+    if (activeSet) {
+      // Only save minimal data to avoid localStorage quota issues
+      const minimalSet = {
+        id: activeSet.id,
+        name: activeSet.name,
+        group_id: activeSet.group_id,
+        groupName: activeSet.groupName,
+        word_count: activeSet.word_count
+      };
+      localStorage.setItem('activeSet', JSON.stringify(minimalSet));
+    } else {
+      localStorage.removeItem('activeSet');
+    }
+  }, [activeSet]);
+
+  // Handle browser back/forward buttons
+  useEffect(() => {
+    const handlePopState = async (event) => {
+      // Check if there are unsaved changes
+      if (hasUnsavedChangesRef.current) {
+        // Prevent navigation and show custom confirmation
+        pendingNavigationRef.current = event.state;
+        setShowBrowserBackConfirm(true);
+        
+        // Push the current state back to keep user on the page
+        const currentState = { view: currentView.name, setId: activeSet?.id };
+        window.history.pushState(currentState, '', window.location.pathname);
+        return;
+      }
+      
+      // No unsaved changes, proceed with navigation
+      await performNavigation(event.state);
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [mockSets, currentView, activeSet]);
+  
+  // Helper function to perform navigation
+  const performNavigation = async (state) => {
+    if (state) {
+      const { view, setId } = state;
+      
+      if (view === 'dashboard') {
+        setCurrentView({ name: 'dashboard' });
+        setActiveSet(null);
+      } else if (view === 'editor') {
+        setCurrentView({ name: 'editor' });
+      } else if (view === 'viewer' && setId) {
+        // Load the set
+        const selectedSet = mockSets.find(set => set.id === setId);
+        if (selectedSet) {
+          try {
+            const { fetchWordsBySet } = await import('./services/words');
+            const wordsData = await fetchWordsBySet(setId);
+            
+            setActiveSet({
+              ...selectedSet,
+              words: wordsData || []
+            });
+            setCurrentView({ name: 'viewer' });
+          } catch (err) {
+            console.error('Failed to fetch words:', err);
+            setActiveSet({
+              ...selectedSet,
+              words: []
+            });
+            setCurrentView({ name: 'viewer' });
+          }
+        }
+      }
+    }
+  };
+  
+  // Handle browser back confirmation
+  const handleConfirmBrowserBack = async () => {
+    hasUnsavedChangesRef.current = false; // Reset the flag
+    setShowBrowserBackConfirm(false);
+    
+    // Perform the pending navigation
+    if (pendingNavigationRef.current) {
+      await performNavigation(pendingNavigationRef.current);
+      pendingNavigationRef.current = null;
+    }
+  };
+  
+  const handleCancelBrowserBack = () => {
+    setShowBrowserBackConfirm(false);
+    pendingNavigationRef.current = null;
+  };
 
   // Loading and error states
   const isLoading = groupsLoading || setsLoading;
   const error = groupsError || setsError;
+
+  // Restore activeSet with full data on mount if returning from refresh
+  useEffect(() => {
+    const restoreSet = async () => {
+      const saved = localStorage.getItem('activeSet');
+      if (saved && currentView.name === 'viewer' && !isLoading) {
+        const minimalSet = JSON.parse(saved);
+        // Always fetch fresh data from database on reload to discard unsaved changes
+        if (minimalSet.id && activeSet && !activeSet.words) {
+          // Invalidate query cache to ensure fresh data
+          queryClient.invalidateQueries({ queryKey: ['words', minimalSet.id] });
+          
+          const selectedSet = mockSets.find(set => set.id === minimalSet.id);
+          if (selectedSet) {
+            try {
+              const { fetchWordsBySet } = await import('./services/words');
+              const wordsData = await fetchWordsBySet(minimalSet.id);
+              
+              setActiveSet({
+                ...selectedSet,
+                words: wordsData || []
+              });
+            } catch (err) {
+              console.error('Failed to fetch words:', err);
+              setActiveSet({
+                ...selectedSet,
+                words: []
+              });
+            }
+          }
+        }
+      }
+    };
+    
+    // Set initial history state on first load
+    if (!window.history.state) {
+      const initialState = { view: currentView.name, setId: activeSet?.id };
+      window.history.replaceState(initialState, '', window.location.pathname);
+    }
+    
+    restoreSet();
+  }, [isLoading, mockSets]); // Run when data is loaded
+
+  // Reset scroll position when view changes
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [currentView.name]);
 
   const handleCreateNewSet = () => {
     setActiveSet({ name: 'New Set', words: [] });
@@ -522,6 +705,9 @@ function App() {
           onSearchChange={setSearchTerm}
           isUpdatingWord={updateWordMutation.isPending}
           isDeletingWord={deleteWordMutation.isPending}
+          onUnsavedChangesChange={(hasChanges) => {
+            hasUnsavedChangesRef.current = hasChanges;
+          }}
         />
       )}
       
@@ -575,6 +761,45 @@ function App() {
                   width: `${(progressNotification.current / progressNotification.total) * 100}%` 
                 }}
               />
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {/* Browser Back Confirmation Modal */}
+      {showBrowserBackConfirm && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 animate-scale-in">
+            <div className="flex items-start space-x-4">
+              <div className="flex-shrink-0">
+                <div className="w-12 h-12 bg-yellow-100 rounded-full flex items-center justify-center">
+                  <svg className="w-6 h-6 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                </div>
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">
+                  Unsaved Changes
+                </h3>
+                <p className="text-gray-600 text-sm mb-6">
+                  You have unsaved changes. Do you want to discard them and leave?
+                </p>
+                <div className="flex space-x-3">
+                  <button
+                    onClick={handleCancelBrowserBack}
+                    className="flex-1 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleConfirmBrowserBack}
+                    className="flex-1 px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg font-medium transition-colors"
+                  >
+                    Discard Changes
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
