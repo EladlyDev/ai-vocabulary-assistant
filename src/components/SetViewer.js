@@ -510,7 +510,7 @@ const SetViewer = ({
     return (
       <div 
         ref={isNewCard ? newCardRef : null}
-        className={`bg-white/80 backdrop-blur-sm rounded-xl shadow-md border border-gray-200/50 p-4 sm:p-6 hover:shadow-lg transition-all duration-200 ${
+        className={`bg-white/80 backdrop-blur-sm rounded-xl shadow-md border border-gray-200/50 p-4 sm:p-6 hover:shadow-lg transition-all duration-200 overflow-hidden ${
           isNewCard ? 'ring-2 ring-purple-400 ring-offset-2 animate-pulse-slow' : ''
         }`}
       >
@@ -518,10 +518,10 @@ const SetViewer = ({
           
           {/* Word and Translation */}
           <div className="flex flex-col space-y-2">
-            <div className="flex items-center justify-between">
-              <div className="flex-1 min-w-0 mr-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex-1 min-w-0">
                 {/* Main Word */}
-                <div className="flex items-center space-x-2">
+                <div className="flex flex-col space-y-2">
                   {isEditing && editingField === 'word' ? (
                     <input
                       type="text"
@@ -541,7 +541,7 @@ const SetViewer = ({
                     />
                   ) : (
                     <h3 
-                      className={`text-xl font-bold cursor-text hover:text-blue-600 transition-colors w-full ${
+                      className={`text-xl font-bold cursor-text hover:text-blue-600 transition-colors break-words ${
                         !wordObj.word ? 'text-gray-400 italic' : 'text-gray-900'
                       }`}
                       onClick={() => startEdit(originalIndex, 'word', wordObj.word)}
@@ -551,23 +551,30 @@ const SetViewer = ({
                     </h3>
                   )}
                   
-                  {/* Listen Button for Word */}
-                  {wordObj.word && (
-                    <button
-                      onClick={() => playAudio(wordObj.word)}
-                      className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors flex-shrink-0"
-                      title="Listen to pronunciation"
-                    >
-                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                        <path fillRule="evenodd" d="M9.383 3.076A1 1 0 0110 4v12a1 1 0 01-1.617.793L4.646 14H2a1 1 0 01-1-1V7a1 1 0 011-1h2.646l3.737-2.793a1 1 0 011.617.793zM14.657 2.929a1 1 0 011.414 0A9.972 9.972 0 0119 10a9.972 9.972 0 01-2.929 7.071 1 1 0 01-1.414-1.414A7.971 7.971 0 0017 10c0-2.21-.894-4.208-2.343-5.657a1 1 0 010-1.414zm-2.829 2.828a1 1 0 011.415 0A5.983 5.983 0 0115 10a5.984 5.984 0 01-1.757 4.243 1 1 0 01-1.415-1.415A3.984 3.984 0 0013 10a3.983 3.983 0 00-1.172-2.828 1 1 0 010-1.415z" clipRule="evenodd" />
-                      </svg>
-                    </button>
+                  {/* Pronunciation */}
+                  {wordObj.pronunciation && (
+                    <div className="text-sm text-gray-500 font-mono break-words">
+                      {wordObj.pronunciation}
+                    </div>
                   )}
                 </div>
               </div>
 
-              {/* Action Buttons - Fixed positioning */}
-              <div className="flex items-center space-x-2 flex-shrink-0">
+              {/* Action Buttons - Fixed positioning on the right */}
+              <div className="flex items-center space-x-1 flex-shrink-0">
+                {/* Listen Button for Word */}
+                {wordObj.word && (
+                  <button
+                    onClick={() => playAudio(wordObj.word)}
+                    className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                    title="Listen to pronunciation"
+                  >
+                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M9.383 3.076A1 1 0 0110 4v12a1 1 0 01-1.617.793L4.646 14H2a1 1 0 01-1-1V7a1 1 0 011-1h2.646l3.737-2.793a1 1 0 011.617.793zM14.657 2.929a1 1 0 011.414 0A9.972 9.972 0 0119 10a9.972 9.972 0 01-2.929 7.071 1 1 0 01-1.414-1.414A7.971 7.971 0 0017 10c0-2.21-.894-4.208-2.343-5.657a1 1 0 010-1.414zm-2.829 2.828a1 1 0 011.415 0A5.983 5.983 0 0115 10a5.984 5.984 0 01-1.757 4.243 1 1 0 01-1.415-1.415A3.984 3.984 0 0013 10a3.983 3.983 0 00-1.172-2.828 1 1 0 010-1.415z" clipRule="evenodd" />
+                    </svg>
+                  </button>
+                )}
+                
                 <button
                   onClick={() => deleteWord(originalIndex)}
                   className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
@@ -579,13 +586,6 @@ const SetViewer = ({
                 </button>
               </div>
             </div>
-              
-            {/* Pronunciation */}
-            {wordObj.pronunciation && (
-              <div className="text-sm text-gray-500 font-mono">
-                {wordObj.pronunciation}
-              </div>
-            )}
             
             {/* Translation */}
             <div className="flex items-center space-x-2">
@@ -602,7 +602,7 @@ const SetViewer = ({
                 />
               ) : (
                 <span 
-                  className={`text-lg cursor-text hover:text-blue-600 transition-colors flex-1 ${
+                  className={`text-lg cursor-text hover:text-blue-600 transition-colors flex-1 break-words ${
                     !wordObj.translation ? 'text-gray-400 italic' : 'text-gray-600'
                   }`}
                   onClick={() => startEdit(originalIndex, 'translation', wordObj.translation)}
@@ -732,7 +732,7 @@ const SetViewer = ({
                 />
               ) : wordObj.sentence ? (
                 <span 
-                  className="text-sm text-gray-700 italic cursor-text hover:text-blue-600 transition-colors flex-1"
+                  className="text-sm text-gray-700 italic cursor-text hover:text-blue-600 transition-colors flex-1 break-words"
                   onClick={() => startEdit(originalIndex, 'sentence', wordObj.sentence)}
                   title="Click to edit"
                 >
@@ -740,7 +740,7 @@ const SetViewer = ({
                 </span>
               ) : (
                 <span 
-                  className="text-sm text-gray-400 italic cursor-pointer hover:text-blue-600 transition-colors flex-1"
+                  className="text-sm text-gray-400 italic cursor-pointer hover:text-blue-600 transition-colors flex-1 break-words"
                   onClick={() => startEdit(originalIndex, 'sentence', '')}
                   title="Click to add"
                 >
@@ -777,7 +777,7 @@ const SetViewer = ({
                 />
               ) : wordObj.sentenceTranslation ? (
                 <div 
-                  className="text-xs text-gray-500 cursor-text hover:text-blue-600 transition-colors"
+                  className="text-xs text-gray-500 cursor-text hover:text-blue-600 transition-colors break-words"
                   onClick={() => startEdit(originalIndex, 'sentenceTranslation', wordObj.sentenceTranslation)}
                   title="Click to edit translation"
                 >
@@ -785,7 +785,7 @@ const SetViewer = ({
                 </div>
               ) : (
                 <div 
-                  className="text-xs text-gray-400 cursor-pointer hover:text-blue-600 transition-colors italic"
+                  className="text-xs text-gray-400 cursor-pointer hover:text-blue-600 transition-colors italic break-words"
                   onClick={() => startEdit(originalIndex, 'sentenceTranslation', '')}
                   title="Click to add translation"
                 >
