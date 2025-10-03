@@ -429,7 +429,12 @@ export const useUpdateWord = () => {
         queryClient.setQueryData(['words', context.setId], context.previousWords);
       }
     },
-    // No onSettled - rely on optimistic updates for instant UI
+    onSettled: (data, error, variables, context) => {
+      // Refetch to ensure data is in sync with database
+      if (context?.setId) {
+        queryClient.invalidateQueries({ queryKey: ['words', context.setId] });
+      }
+    },
   });
 };
 

@@ -58,8 +58,11 @@ const SetViewer = ({
 
   // Track original state for change detection
   useEffect(() => {
-    if (!originalSet) {
-      const clonedSet = JSON.parse(JSON.stringify(set));
+    // Always update originalSet when set changes and has words
+    const clonedSet = JSON.parse(JSON.stringify(set));
+    
+    // Initialize if not set, or if originalSet has no words but current set does
+    if (!originalSet || (originalSet && (!originalSet.words || originalSet.words.length === 0) && set.words && set.words.length > 0)) {
       setOriginalSet(clonedSet);
       originalSetHash.current = JSON.stringify(clonedSet);
     }
@@ -268,7 +271,9 @@ const SetViewer = ({
           );
         } else {
           // Word exists - check if it was modified
-          const originalWord = originalSet?.words?.[i];
+          // Find original word by ID, not by index
+          const originalWord = originalSet?.words?.find(w => w.id === wordObj.id);
+          
           if (originalWord && wordObj.id) {
             const hasChanged = 
               wordObj.word !== originalWord.word ||
@@ -280,14 +285,14 @@ const SetViewer = ({
               wordObj.pronunciation !== originalWord.pronunciation;
             
             if (hasChanged && onUpdateWord) {
-              // Build updates object with only changed fields
+              // Build updates object with only changed fields (use UI field names)
               const updates = {};
               if (wordObj.word !== originalWord.word) updates.word = wordObj.word;
               if (wordObj.translation !== originalWord.translation) updates.translation = wordObj.translation || '';
               if (wordObj.sentence !== originalWord.sentence) updates.sentence = wordObj.sentence || null;
-              if (wordObj.sentenceTranslation !== originalWord.sentenceTranslation) updates.sentence_translation = wordObj.sentenceTranslation || null;
+              if (wordObj.sentenceTranslation !== originalWord.sentenceTranslation) updates.sentenceTranslation = wordObj.sentenceTranslation || null;
               if (wordObj.example !== originalWord.example) updates.example = wordObj.example || null;
-              if (wordObj.image !== originalWord.image) updates.image_url = wordObj.image || null;
+              if (wordObj.image !== originalWord.image) updates.image = wordObj.image || null;
               if (wordObj.pronunciation !== originalWord.pronunciation) updates.pronunciation = wordObj.pronunciation || null;
               
               wordUpdatePromises.push(

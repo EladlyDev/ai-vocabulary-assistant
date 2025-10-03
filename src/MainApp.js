@@ -108,23 +108,27 @@ function App() {
     const activeSetId = activeSet?.id;
     if (activeSetId && mockSets.length > 0 && currentView.name === 'viewer') {
       const updatedSet = mockSets.find(s => s.id === activeSetId);
-      if (updatedSet && updatedSet.word_count !== activeSet.word_count) {
-        console.log(`Word count changed from ${activeSet.word_count} to ${updatedSet.word_count}, fetching fresh words`);
+      if (updatedSet) {
+        const wordCountChanged = updatedSet.word_count !== activeSet.word_count;
+        const wordsMismatch = updatedSet.word_count > 0 && 
+                             (!activeSet.words || activeSet.words.length !== updatedSet.word_count);
         
-        // Fetch fresh words from database
-        import('./services/words').then(({ fetchWordsBySet }) => {
-          fetchWordsBySet(activeSetId).then(wordsData => {
-            setActiveSet({
-              ...updatedSet,
-              words: wordsData || []
+        if (wordCountChanged || wordsMismatch) {
+          // Fetch fresh words from database
+          import('./services/words').then(({ fetchWordsBySet }) => {
+            fetchWordsBySet(activeSetId).then(wordsData => {
+              setActiveSet({
+                ...updatedSet,
+                words: wordsData || []
+              });
+            }).catch(err => {
+              console.error('Failed to fetch words for sync:', err);
             });
-          }).catch(err => {
-            console.error('Failed to fetch words for sync:', err);
           });
-        });
+        }
       }
     }
-  }, [mockSets]); // Only depend on mockSets to avoid infinite loops
+  }, [mockSets, activeSet]); // Depend on both mockSets and activeSet for proper sync
 
   // Persist currentView and activeSet to localStorage
   useEffect(() => {
@@ -644,14 +648,12 @@ function App() {
           // Save updated queue back to localStorage
           localStorage.setItem('uploadQueue', JSON.stringify(currentQueue));
           
-          // Refetch queries every 3 batches (30 words) for real-time UI updates
-          // DON'T refetch sets during upload - let uploadingWordsCount handle the count
-          if ((i + 1) % 3 === 0 || i === batches.length - 1) {
-            await queryClient.refetchQueries({ 
-              queryKey: ['words', currentQueue.setId],
-              type: 'active'
-            });
-          }
+          // Refetch after every batch for real-time UI updates
+          // This ensures words appear after each 10 words (or remainder if last batch)
+          await queryClient.refetchQueries({ 
+            queryKey: ['words', currentQueue.setId],
+            type: 'active'
+          });
           
           // Update progress notification
           setProgressNotification({
@@ -679,15 +681,21 @@ function App() {
       // Mark upload as complete
       uploadInProgressRef.current = false;
       
-      // Final invalidation to refresh the set data with accurate counts
-      queryClient.invalidateQueries({ 
-        queryKey: ['words', currentQueue.setId],
-        refetchType: 'active'
-      });
-      queryClient.invalidateQueries({ 
-        queryKey: ['sets'],
-        refetchType: 'active'
-      });
+      // Final refetch to refresh the set data with accurate counts
+      // Use refetchQueries for immediate update (not invalidateQueries)
+      console.log('🔄 Final refetch to display all words...');
+      await Promise.all([
+        queryClient.refetchQueries({ 
+          queryKey: ['words', currentQueue.setId],
+          type: 'active'
+        }),
+        queryClient.refetchQueries({ 
+          queryKey: ['sets'],
+          type: 'active'
+        })
+      ]);
+      
+      console.log('✅ Final refetch complete - all words should be visible');
       
       // Hide progress notification
       setTimeout(() => {
@@ -705,35 +713,43 @@ function App() {
   const handleSaveNewSet = async (newSet, targetGroupId = null) => {
     if (newSet.name.trim()) {
       try {
-        console.log('Starting set creation...', newSet);
-        
         // Determine which group to add to
         let groupId = targetGroupId;
         
+        // Check if targetGroupId is a temp ID - if so, treat as no group
+        if (groupId && groupId.toString().startsWith('temp-')) {
+          groupId = null;
+        }
+        
         // If no target group and no groups exist, create a default group first
         if (!groupId && groups.length === 0) {
-          console.log('No groups exist, creating default group...');
           const newGroup = await createGroupMutation.mutateAsync({
             name: "My Vocabulary Sets",
             color: "blue"
           });
           groupId = newGroup.id;
-          console.log('Default group created:', groupId);
         }
         
-        // If still no group, use first group
+        // If still no group, use first real group (skip temp groups)
         if (!groupId) {
-          groupId = groups[0].id;
-          console.log('Using first group:', groupId);
+          const realGroup = groups.find(g => !g.id.toString().startsWith('temp-'));
+          if (realGroup) {
+            groupId = realGroup.id;
+          } else {
+            // All groups are temp, create a real one
+            const newGroup = await createGroupMutation.mutateAsync({
+              name: "My Vocabulary Sets",
+              color: "blue"
+            });
+            groupId = newGroup.id;
+          }
         }
 
         // Create the set first (wait for it to get real ID)
-        console.log('Creating set...');
         const createdSet = await createSetMutation.mutateAsync({
           group_id: groupId,
           name: newSet.name
         });
-        console.log('Set created with ID:', createdSet.id);
         
         // Parse all words and create upload queue
         const wordCount = newSet.words.filter(w => w.trim()).length;
@@ -887,14 +903,12 @@ function App() {
                 // Save updated queue to localStorage
                 localStorage.setItem('uploadQueue', JSON.stringify(currentQueue));
                 
-                // Refetch queries every 3 batches (30 words) for real-time UI updates
-                // DON'T refetch sets during upload - let uploadingWordsCount handle the count
-                if ((i + 1) % 3 === 0 || i === batches.length - 1) {
-                  await queryClient.refetchQueries({ 
-                    queryKey: ['words', createdSet.id],
-                    type: 'active'
-                  });
-                }
+                // Refetch after every batch for real-time UI updates
+                // This ensures words appear after each 10 words (or remainder if last batch)
+                await queryClient.refetchQueries({ 
+                  queryKey: ['words', createdSet.id],
+                  type: 'active'
+                });
                 
                 // Update progress notification
                 setProgressNotification({
@@ -925,15 +939,21 @@ function App() {
             // Mark upload as complete
             uploadInProgressRef.current = false;
             
-            // Final invalidation to refresh UI with accurate database data
-            queryClient.invalidateQueries({ 
-              queryKey: ['words', createdSet.id],
-              refetchType: 'active'
-            });
-            queryClient.invalidateQueries({ 
-              queryKey: ['sets'],
-              refetchType: 'active'
-            });
+            // Final refetch to refresh UI with accurate database data
+            // Use refetchQueries for immediate update (not invalidateQueries)
+            console.log('🔄 Final refetch to display all words...');
+            await Promise.all([
+              queryClient.refetchQueries({ 
+                queryKey: ['words', createdSet.id],
+                type: 'active'
+              }),
+              queryClient.refetchQueries({ 
+                queryKey: ['sets'],
+                type: 'active'
+              })
+            ]);
+            
+            console.log('✅ Final refetch complete - all words should be visible');
             
             // Hide progress notification after completion
             setTimeout(() => {
