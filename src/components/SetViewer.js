@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import ExportModal from './ExportModal';
 import BackToTop from './BackToTop';
+import { processWordsWithAI } from '../services/aiService';
 
 const SetViewer = ({ 
   set, 
@@ -28,7 +29,7 @@ const SetViewer = ({
   const [showUnsavedChangesModal, setShowUnsavedChangesModal] = useState(false);
   const [pendingAction, setPendingAction] = useState(null);
   const [isCreatingNewCard, setIsCreatingNewCard] = useState(false);
-  const [aiGenerationOptions, setAiGenerationOptions] = useState({});
+  const [generatingAI, setGeneratingAI] = useState(null); // Track which card+field is generating: {cardIndex, field}
   const newCardRef = useRef(null); // Reference to scroll to new card
   const [notification, setNotification] = useState(null);
   const [showNotification, setShowNotification] = useState(false);
@@ -70,6 +71,11 @@ const SetViewer = ({
 
   // Optimized change detection using memoization
   const checkForChanges = useCallback(() => {
+    // Safety check
+    if (!set || !set.words) {
+      return false;
+    }
+    
     if (!originalSet) return false;
     
     // Check if user is actively editing a field with a different value
@@ -129,7 +135,13 @@ const SetViewer = ({
 
   // Detect changes with optimized comparison
   useEffect(() => {
+    // Safety check: ensure set and set.words exist
+    if (!set || !set.words) {
+      return;
+    }
+    
     const hasChanges = checkForChanges();
+    
     if (hasChanges !== hasUnsavedChanges) {
       setHasUnsavedChanges(hasChanges);
       // Notify parent component about unsaved changes using ref
@@ -198,6 +210,10 @@ const SetViewer = ({
   };
 
   const handleSaveChanges = async () => {
+    console.log('=== HANDLE SAVE CHANGES CALLED ===');
+    console.log('Current set.words:', set.words);
+    console.log('isCreatingNewCard:', isCreatingNewCard);
+    
     // Validate and categorize words
     const wordsToRemove = [];
     const wordsToWarn = [];
@@ -209,16 +225,32 @@ const SetViewer = ({
       const hasOtherData = wordObj.translation || wordObj.sentence || wordObj.image || 
                           (wordObj.tags && wordObj.tags.length > 0);
       
+      console.log(`Word ${index}:`, {
+        word: wordObj.word,
+        hasWord,
+        hasOtherData,
+        id: wordObj.id
+      });
+      
       if (!hasWord && !hasOtherData) {
         // Empty card - remove silently
+        console.log(`  -> Marking for removal (empty)`);
         wordsToRemove.push(index);
       } else if (!hasWord && hasOtherData) {
         // Has data but no word - warn user
+        console.log(`  -> Warning (has data but no word)`);
         wordsToWarn.push(index);
       } else {
         // Valid word
+        console.log(`  -> Valid word`);
         validWords.push(word);
       }
+    });
+    
+    console.log('Summary:', {
+      toRemove: wordsToRemove,
+      toWarn: wordsToWarn,
+      valid: validWords.length
     });
     
     // If there are cards with data but no word, show warning
@@ -243,6 +275,9 @@ const SetViewer = ({
     
     // Create new words in database
     if (onCreateWord) {
+      console.log('=== SAVING CHANGES ===');
+      console.log('Filtered words:', filteredWords);
+      
       const wordCreationPromises = [];
       const wordUpdatePromises = [];
       const wordsToCreate = [];
@@ -251,8 +286,11 @@ const SetViewer = ({
         const word = filteredWords[i];
         const wordObj = typeof word === 'string' ? { word } : word;
         
+        console.log(`Word ${i}:`, wordObj, 'ID:', wordObj.id, 'Is temp?', wordObj.id?.startsWith('temp-'));
+        
         // Only create if word doesn't have an ID (new word)
         if (!wordObj.id || wordObj.id.startsWith('temp-')) {
+          console.log('Creating word:', wordObj.word);
           wordsToCreate.push(wordObj);
           wordCreationPromises.push(
             onCreateWord({
@@ -305,10 +343,13 @@ const SetViewer = ({
       
       // Wait for all words to be created and updated
       if (wordCreationPromises.length > 0 || wordUpdatePromises.length > 0) {
+        console.log('Waiting for word creation/update promises...');
         const [createdWords] = await Promise.all([
           wordCreationPromises.length > 0 ? Promise.all(wordCreationPromises) : Promise.resolve([]),
           wordUpdatePromises.length > 0 ? Promise.all(wordUpdatePromises) : Promise.resolve([])
         ]);
+        
+        console.log('Created words from DB:', createdWords);
         
         // Update the set with the created words (they now have IDs)
         const updatedWords = filteredWords.map(word => {
@@ -316,10 +357,13 @@ const SetViewer = ({
           if (!wordObj.id || wordObj.id.startsWith('temp-')) {
             // Find the corresponding created word
             const createdWord = createdWords.find(cw => cw.word === wordObj.word);
+            console.log('Replacing temp word', wordObj.word, 'with', createdWord);
             return createdWord || wordObj;
           }
           return wordObj;
         });
+        
+        console.log('Final updated words:', updatedWords);
         
         // Update set with words that now have IDs
         const updatedSet = { ...set, words: updatedWords };
@@ -342,21 +386,7 @@ const SetViewer = ({
       onUpdateSet({ ...set, words: filteredWords });
     }
     
-    // Generate AI content only for words that have AI generation requested
-    const wordsToEnrich = filteredWords.filter(word => {
-      const wordIndex = set.words.findIndex(w => w === word);
-      const options = aiGenerationOptions[wordIndex] || {};
-      
-      return options.translation || options.sentence || options.image;
-    });
-    
-    if (wordsToEnrich.length > 0) {
-      console.log('Generating AI content for', wordsToEnrich.length, 'words...');
-      showNotificationMessage(`AI generation started for ${wordsToEnrich.length} word${wordsToEnrich.length > 1 ? 's' : ''}.`, 'success');
-    }
-    
-    // Clear AI generation options
-    setAiGenerationOptions({});
+    showNotificationMessage('Changes saved successfully!', 'success');
   };
 
   const handleExportComplete = (format, filename) => {
@@ -418,7 +448,13 @@ const SetViewer = ({
   };
 
   const addNewWord = () => {
+    console.log('=== ADD NEW WORD ===');
+    console.log('Current set:', JSON.parse(JSON.stringify(set))); // Deep clone for logging
+    console.log('Current set.words:', JSON.parse(JSON.stringify(set.words)));
+    
+    const tempId = `temp-${Date.now()}-${Math.random()}`;
     const newWord = {
+      id: tempId, // Temporary ID to track this card until saved
       word: '',
       translation: '',
       sentence: '',
@@ -427,9 +463,21 @@ const SetViewer = ({
       pronunciation: '',
       tags: []
     };
+    
+    console.log('New word object:', JSON.parse(JSON.stringify(newWord)));
+    
     // Add new card at the BEGINNING of the array for better visibility
     const updatedWords = [newWord, ...set.words];
-    onUpdateSet({ ...set, words: updatedWords });
+    
+    console.log('Updated words array (should have new empty card at [0]):', JSON.parse(JSON.stringify(updatedWords)));
+    console.log('First item should be empty:', updatedWords[0]);
+    console.log('Second item should be existing card:', updatedWords[1]);
+    
+    const updatedSet = { ...set, words: updatedWords };
+    console.log('Calling onUpdateSet with:', JSON.parse(JSON.stringify(updatedSet)));
+    
+    onUpdateSet(updatedSet);
+    
     // The new card is now at index 0
     setEditingCard(0);
     setEditingField('word');
@@ -443,11 +491,16 @@ const SetViewer = ({
     });
   };
 
-  const toggleAiGeneration = (cardIndex, field) => {
+  const toggleAiGeneration = async (cardIndex, field) => {
+    console.log('AI Generation triggered for:', field, 'at index:', cardIndex);
+    
     // Check if the word field has content
     const wordObj = typeof set.words[cardIndex] === 'string' 
       ? { word: set.words[cardIndex] } 
       : set.words[cardIndex];
+    
+    console.log('Word object:', wordObj);
+    console.log('Set languages:', set.source_language, set.target_language);
     
     if (!wordObj.word || wordObj.word.trim() === '') {
       showNotificationMessage(
@@ -457,13 +510,159 @@ const SetViewer = ({
       return;
     }
     
-    setAiGenerationOptions(prev => ({
-      ...prev,
-      [cardIndex]: {
-        ...prev[cardIndex],
-        [field]: !prev[cardIndex]?.[field]
+    // Generate immediately
+    setGeneratingAI({ cardIndex, field }); // Track specific card and field
+    const fieldName = field === 'sentence' ? 'example sentence' : field;
+    showNotificationMessage(`Generating ${fieldName}...`, 'info');
+    
+    try {
+      // Use set's languages, or detect from current word, or use defaults
+      let sourceLanguage = set.source_language;
+      let targetLanguage = set.target_language;
+      
+      // If languages aren't set, try to detect from the current word being processed
+      if (!sourceLanguage || !targetLanguage) {
+        // Check the current word's language first (more accurate than checking all words)
+        const hasArabic = /[\u0600-\u06FF]/.test(wordObj.word);
+        const hasChinese = /[\u4E00-\u9FFF]/.test(wordObj.word);
+        const hasJapanese = /[\u3040-\u309F\u30A0-\u30FF]/.test(wordObj.word);
+        const hasKorean = /[\uAC00-\uD7AF]/.test(wordObj.word);
+        const hasCyrillic = /[\u0400-\u04FF]/.test(wordObj.word);
+        
+        // Detect source language from the word itself
+        if (hasArabic) {
+          sourceLanguage = 'Arabic';
+          targetLanguage = 'English';
+        } else if (hasChinese) {
+          sourceLanguage = 'Chinese';
+          targetLanguage = 'English';
+        } else if (hasJapanese) {
+          sourceLanguage = 'Japanese';
+          targetLanguage = 'English';
+        } else if (hasKorean) {
+          sourceLanguage = 'Korean';
+          targetLanguage = 'English';
+        } else if (hasCyrillic) {
+          sourceLanguage = 'Russian';
+          targetLanguage = 'English';
+        } else {
+          // Check if there's Arabic in other word fields (translation/definition)
+          const hasArabicInTranslation = /[\u0600-\u06FF]/.test(
+            wordObj.translation || wordObj.definition || ''
+          );
+          
+          if (hasArabicInTranslation) {
+            // English word, Arabic translation
+            sourceLanguage = 'English';
+            targetLanguage = 'Arabic';
+          } else {
+            // For new empty cards, check other cards in the set to detect the pattern
+            let detectedFromOtherCards = false;
+            
+            for (let i = 0; i < set.words.length; i++) {
+              if (i === cardIndex) continue; // Skip the current card
+              
+              const otherWord = typeof set.words[i] === 'string' 
+                ? { word: set.words[i] } 
+                : set.words[i];
+              
+              if (otherWord.word || otherWord.translation || otherWord.definition) {
+                // Check if this card has Arabic content
+                const hasArabicInOther = /[\u0600-\u06FF]/.test(
+                  otherWord.word || otherWord.translation || otherWord.definition || ''
+                );
+                
+                const hasArabicInOtherWord = /[\u0600-\u06FF]/.test(otherWord.word || '');
+                const hasArabicInOtherTranslation = /[\u0600-\u06FF]/.test(
+                  otherWord.translation || otherWord.definition || ''
+                );
+                
+                if (hasArabicInOtherWord) {
+                  // Arabic words in the set -> Arabic to English
+                  sourceLanguage = 'Arabic';
+                  targetLanguage = 'English';
+                  detectedFromOtherCards = true;
+                  break;
+                } else if (hasArabicInOtherTranslation) {
+                  // English words with Arabic translations -> English to Arabic
+                  sourceLanguage = 'English';
+                  targetLanguage = 'Arabic';
+                  detectedFromOtherCards = true;
+                  break;
+                }
+              }
+            }
+            
+            // If we couldn't detect from other cards, use default
+            if (!detectedFromOtherCards) {
+              sourceLanguage = 'English';
+              targetLanguage = 'Arabic'; // Default to English->Arabic instead of English->English
+            }
+          }
+        }
+        
+        console.log('Languages not set, detected from word:', sourceLanguage, '->', targetLanguage);
+        
+        // Update the set with detected languages
+        onUpdateSet({ ...set, source_language: sourceLanguage, target_language: targetLanguage });
       }
-    }));
+      
+      console.log('Using languages:', sourceLanguage, '->', targetLanguage);
+      
+      // Process single word - pass just the word text as a string in an array
+      const wordsToProcess = [wordObj.word];
+      
+      console.log('Processing words:', wordsToProcess);
+      
+      const aiResult = await processWordsWithAI(wordsToProcess, sourceLanguage, targetLanguage);
+      
+      console.log('AI Response:', aiResult);
+      
+      // Extract the words from the AI response
+      if (aiResult && aiResult.success && aiResult.words) {
+        // The AI returns {success: true, words: {wordText: {translation, sentence, sentenceTranslation}}}
+        // We need to extract the data for our specific word
+        const wordText = wordObj.word;
+        const enrichedWord = aiResult.words[wordText];
+        
+        console.log('Enriched word data:', enrichedWord);
+        
+        if (enrichedWord) {
+          // Update the word with generated content
+          const updatedWords = [...set.words];
+          const currentWord = typeof updatedWords[cardIndex] === 'string' 
+            ? { word: updatedWords[cardIndex] } 
+            : updatedWords[cardIndex];
+          
+          if (field === 'translation') {
+            updatedWords[cardIndex] = {
+              ...currentWord,
+              translation: enrichedWord.translation
+            };
+          } else if (field === 'sentence') {
+            updatedWords[cardIndex] = {
+              ...currentWord,
+              sentence: enrichedWord.sentence,
+              sentenceTranslation: enrichedWord.sentenceTranslation
+            };
+          }
+          
+          console.log('Updated words:', updatedWords);
+          
+          onUpdateSet({ ...set, words: updatedWords });
+          showNotificationMessage(`${fieldName.charAt(0).toUpperCase() + fieldName.slice(1)} generated successfully!`, 'success');
+        } else {
+          throw new Error('No data returned for word');
+        }
+      } else {
+        throw new Error('Invalid AI response format');
+      }
+    } catch (error) {
+      console.error('AI generation failed:', error);
+      showNotificationMessage(`Failed to generate ${fieldName}. Error: ${error.message}`, 'error');
+    } finally {
+      setGeneratingAI(null); // Clear the generating state
+    }
   };
 
   const startEdit = (cardIndex, field, currentValue) => {
@@ -508,26 +707,111 @@ const SetViewer = ({
     setEditingValue('');
   };
 
-  const playAudio = (text, language = 'en') => {
+  const playAudio = (text, language) => {
     if ('speechSynthesis' in window) {
+      // Cancel any ongoing speech
+      window.speechSynthesis.cancel();
+      
       const utterance = new SpeechSynthesisUtterance(text);
       
-      // Try to set appropriate language
-      const langMap = {
-        'spanish': 'es-ES',
-        'french': 'fr-FR',
-        'japanese': 'ja-JP',
-        'german': 'de-DE'
+      // Comprehensive language codes mapping
+      const languageCodes = {
+        'English': 'en-US',
+        'Spanish': 'es-ES',
+        'French': 'fr-FR',
+        'German': 'de-DE',
+        'Italian': 'it-IT',
+        'Portuguese': 'pt-PT',
+        'Russian': 'ru-RU',
+        'Arabic': 'ar-SA',
+        'Chinese (Mandarin)': 'zh-CN',
+        'Japanese': 'ja-JP',
+        'Korean': 'ko-KR',
+        'Hindi': 'hi-IN',
+        'Turkish': 'tr-TR',
+        'Dutch': 'nl-NL',
+        'Polish': 'pl-PL',
+        'Swedish': 'sv-SE',
+        'Norwegian': 'no-NO',
+        'Danish': 'da-DK',
+        'Finnish': 'fi-FI',
+        'Greek': 'el-GR',
+        'Hebrew': 'he-IL',
+        'Thai': 'th-TH',
+        'Vietnamese': 'vi-VN',
+        'Indonesian': 'id-ID',
+        'Malay': 'ms-MY',
+        'Filipino': 'fil-PH',
+        'Ukrainian': 'uk-UA',
+        'Czech': 'cs-CZ',
+        'Romanian': 'ro-RO',
+        'Hungarian': 'hu-HU',
+        'Persian (Farsi)': 'fa-IR',
+        'Urdu': 'ur-PK',
+        'Bengali': 'bn-BD',
+        'Tamil': 'ta-IN',
+        'Telugu': 'te-IN',
+        'Swahili': 'sw-KE'
       };
       
-      const setName = set.name.toLowerCase();
-      Object.keys(langMap).forEach(lang => {
-        if (setName.includes(lang)) {
-          utterance.lang = langMap[lang];
-        }
-      });
+      // Use the provided language or detect from set
+      const targetLang = language || set.source_language || 'English';
+      const langCode = languageCodes[targetLang] || 'en-US';
+      utterance.lang = langCode;
+      utterance.rate = 0.85; // Slightly slower for learning
+      utterance.pitch = 1;
+      utterance.volume = 1;
       
-      speechSynthesis.speak(utterance);
+      // Wait for voices to be loaded (important for some browsers, especially for Arabic)
+      const speakWithVoice = () => {
+        const voices = window.speechSynthesis.getVoices();
+        
+        // For Arabic, try multiple approaches
+        if (targetLang === 'Arabic') {
+          // Try to find Arabic voice with various patterns
+          let voice = voices.find(v => v.lang === 'ar-SA') ||
+                      voices.find(v => v.lang.startsWith('ar-')) ||
+                      voices.find(v => v.lang.includes('ar')) ||
+                      voices.find(v => v.name.toLowerCase().includes('arabic'));
+          
+          if (voice) {
+            utterance.voice = voice;
+          }
+        } else {
+          // For other languages, find matching voice
+          const langPrefix = langCode.split('-')[0];
+          const voice = voices.find(v => v.lang === langCode) ||
+                       voices.find(v => v.lang.startsWith(langPrefix));
+          
+          if (voice) {
+            utterance.voice = voice;
+          }
+        }
+        
+        // Small delay before speaking (helps with some browsers)
+        setTimeout(() => {
+          window.speechSynthesis.speak(utterance);
+        }, 100);
+      };
+      
+      // Check if voices are already loaded
+      const voices = window.speechSynthesis.getVoices();
+      if (voices.length > 0) {
+        speakWithVoice();
+      } else {
+        // Wait for voices to load (critical for Arabic and other languages)
+        window.speechSynthesis.onvoiceschanged = () => {
+          speakWithVoice();
+          window.speechSynthesis.onvoiceschanged = null; // Clean up
+        };
+        
+        // Fallback: Try after 500ms even if event doesn't fire
+        setTimeout(() => {
+          if (window.speechSynthesis.getVoices().length > 0) {
+            speakWithVoice();
+          }
+        }, 500);
+      }
     }
   };
 
@@ -571,7 +855,6 @@ const SetViewer = ({
     const wordObj = typeof word === 'string' ? { word } : word;
     const isEditing = editingCard === originalIndex;
     const isNewCard = isCreatingNewCard && originalIndex === 0; // New card is now at index 0
-    const aiOptions = aiGenerationOptions[originalIndex] || {};
 
     return (
       <div 
@@ -678,22 +961,40 @@ const SetViewer = ({
                 </span>
               )}
               
-              {/* AI Generation Toggle for Translation */}
-              {isNewCard && (
-                <button
-                  onClick={() => toggleAiGeneration(originalIndex, 'translation')}
-                  className={`p-1 rounded transition-colors ${
-                    aiOptions.translation 
-                      ? 'bg-purple-100 text-purple-700 hover:bg-purple-200' 
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                  }`}
-                  title="Toggle AI generation for translation"
-                >
-                  <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+              {/* AI Generation Button for Translation */}
+              <button
+                onClick={() => toggleAiGeneration(originalIndex, 'translation')}
+                disabled={generatingAI !== null || !wordObj.word}
+                className={`p-1.5 rounded transition-colors flex-shrink-0 ${
+                  generatingAI?.cardIndex === originalIndex && generatingAI?.field === 'translation'
+                    ? 'bg-purple-200 text-purple-700 animate-pulse cursor-wait'
+                    : generatingAI !== null
+                    ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                    : wordObj.translation && wordObj.translation.trim() !== ''
+                    ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                    : 'bg-purple-100 text-purple-700 hover:bg-purple-200'
+                }`}
+                title={
+                  !wordObj.word 
+                    ? "Add a word first" 
+                    : generatingAI?.cardIndex === originalIndex && generatingAI?.field === 'translation'
+                    ? "Generating..." 
+                    : wordObj.translation 
+                    ? "Regenerate translation with AI" 
+                    : "Generate translation with AI"
+                }
+              >
+                {generatingAI?.cardIndex === originalIndex && generatingAI?.field === 'translation' ? (
+                  <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                ) : (
+                  <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
                     <path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v3h8v-3z" />
                   </svg>
-                </button>
-              )}
+                )}
+              </button>
             </div>
           </div>
 
@@ -757,11 +1058,7 @@ const SetViewer = ({
                         e.stopPropagation();
                         toggleAiGeneration(originalIndex, 'image');
                       }}
-                      className={`p-1 rounded transition-colors ${
-                        aiOptions.image 
-                          ? 'bg-purple-100 text-purple-700 hover:bg-purple-200' 
-                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                      }`}
+                      className="p-1 rounded transition-colors bg-gray-100 text-gray-600 hover:bg-gray-200"
                       title="Toggle AI generation for image"
                     >
                       <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
@@ -772,11 +1069,6 @@ const SetViewer = ({
                 </div>
                 <p className="text-sm text-gray-500 group-hover:text-blue-600 transition-colors mt-2">
                   Click to add image URL
-                  {isNewCard && aiOptions.image && (
-                    <span className="block text-xs text-purple-600 mt-1">
-                      AI will generate
-                    </span>
-                  )}
                 </p>
               </div>
             </div>
@@ -813,6 +1105,41 @@ const SetViewer = ({
                   Click to add example sentence
                 </span>
               )}
+              
+              {/* AI Generation Button for Sentence */}
+              <button
+                onClick={() => toggleAiGeneration(originalIndex, 'sentence')}
+                disabled={generatingAI !== null || !wordObj.word}
+                className={`p-1.5 rounded transition-colors flex-shrink-0 ml-2 ${
+                  generatingAI?.cardIndex === originalIndex && generatingAI?.field === 'sentence'
+                    ? 'bg-purple-200 text-purple-700 animate-pulse cursor-wait'
+                    : generatingAI !== null
+                    ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                    : wordObj.sentence && wordObj.sentence.trim() !== ''
+                    ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                    : 'bg-purple-100 text-purple-700 hover:bg-purple-200'
+                }`}
+                title={
+                  !wordObj.word 
+                    ? "Add a word first" 
+                    : generatingAI?.cardIndex === originalIndex && generatingAI?.field === 'sentence'
+                    ? "Generating..." 
+                    : wordObj.sentence 
+                    ? "Regenerate sentence with AI" 
+                    : "Generate sentence with AI"
+                }
+              >
+                {generatingAI?.cardIndex === originalIndex && generatingAI?.field === 'sentence' ? (
+                  <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                ) : (
+                  <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                    <path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v3h8v-3z" />
+                  </svg>
+                )}
+              </button>
               
               {/* Listen Button for Sentence */}
               {wordObj.sentence && (
@@ -898,7 +1225,6 @@ const SetViewer = ({
               const wordObj = typeof word === 'string' ? { word } : word;
               const isEditing = editingCard === originalIndex;
               const isNewCard = isCreatingNewCard && originalIndex === 0;
-              const aiOptions = aiGenerationOptions[originalIndex] || {};
               
               return (
                 <tr key={originalIndex} className="hover:bg-gray-50/50">
@@ -1002,22 +1328,40 @@ const SetViewer = ({
                         </span>
                       )}
                       
-                      {/* AI Generation Toggle for Translation */}
-                      {isNewCard && (
-                        <button
-                          onClick={() => toggleAiGeneration(originalIndex, 'translation')}
-                          className={`p-1 rounded transition-colors flex-shrink-0 ${
-                            aiOptions.translation 
-                              ? 'bg-purple-100 text-purple-700 hover:bg-purple-200' 
-                              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                          }`}
-                          title="Toggle AI generation for translation"
-                        >
-                          <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                      {/* AI Generation Button for Translation */}
+                      <button
+                        onClick={() => toggleAiGeneration(originalIndex, 'translation')}
+                        disabled={generatingAI !== null || !wordObj.word}
+                        className={`p-1.5 rounded transition-colors flex-shrink-0 ${
+                          generatingAI?.cardIndex === originalIndex && generatingAI?.field === 'translation'
+                            ? 'bg-purple-200 text-purple-700 animate-pulse cursor-wait'
+                            : generatingAI !== null
+                            ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                            : wordObj.translation && wordObj.translation.trim() !== ''
+                            ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                            : 'bg-purple-100 text-purple-700 hover:bg-purple-200'
+                        }`}
+                        title={
+                          !wordObj.word 
+                            ? "Add a word first" 
+                            : generatingAI?.cardIndex === originalIndex && generatingAI?.field === 'translation'
+                            ? "Generating..." 
+                            : wordObj.translation 
+                            ? "Regenerate translation with AI" 
+                            : "Generate translation with AI"
+                        }
+                      >
+                        {generatingAI?.cardIndex === originalIndex && generatingAI?.field === 'translation' ? (
+                          <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                        ) : (
+                          <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
                             <path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v3h8v-3z" />
                           </svg>
-                        </button>
-                      )}
+                        )}
+                      </button>
                     </div>
                   </td>
                   
@@ -1064,22 +1408,40 @@ const SetViewer = ({
                         </span>
                       )}
                       
-                      {/* AI Generation Toggle for Sentence */}
-                      {isNewCard && (
-                        <button
-                          onClick={() => toggleAiGeneration(originalIndex, 'sentence')}
-                          className={`p-1 rounded transition-colors flex-shrink-0 ${
-                            aiOptions.sentence 
-                              ? 'bg-purple-100 text-purple-700 hover:bg-purple-200' 
-                              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                          }`}
-                          title="Toggle AI generation for sentence"
-                        >
-                          <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                      {/* AI Generation Button for Sentence */}
+                      <button
+                        onClick={() => toggleAiGeneration(originalIndex, 'sentence')}
+                        disabled={generatingAI !== null || !wordObj.word}
+                        className={`p-1.5 rounded transition-colors flex-shrink-0 ${
+                          generatingAI?.cardIndex === originalIndex && generatingAI?.field === 'sentence'
+                            ? 'bg-purple-200 text-purple-700 animate-pulse cursor-wait'
+                            : generatingAI !== null
+                            ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                            : wordObj.sentence && wordObj.sentence.trim() !== ''
+                            ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                            : 'bg-purple-100 text-purple-700 hover:bg-purple-200'
+                        }`}
+                        title={
+                          !wordObj.word 
+                            ? "Add a word first" 
+                            : generatingAI?.cardIndex === originalIndex && generatingAI?.field === 'sentence'
+                            ? "Generating..." 
+                            : wordObj.sentence 
+                            ? "Regenerate sentence with AI" 
+                            : "Generate sentence with AI"
+                        }
+                      >
+                        {generatingAI?.cardIndex === originalIndex && generatingAI?.field === 'sentence' ? (
+                          <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                        ) : (
+                          <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
                             <path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v3h8v-3z" />
                           </svg>
-                        </button>
-                      )}
+                        )}
+                      </button>
                     </div>
                   </td>
                   
@@ -1302,13 +1664,13 @@ const SetViewer = ({
                     {/* Save Button */}
                     <button
                       onClick={handleSaveChanges}
-                      disabled={!hasUnsavedChanges}
+                      disabled={!hasUnsavedChanges || generatingAI !== null}
                       className={`inline-flex items-center justify-center px-3 py-2 text-sm font-medium rounded-lg transition-all duration-200 shadow-sm hover:shadow-md flex-shrink-0 ${
-                        hasUnsavedChanges 
+                        hasUnsavedChanges && generatingAI === null
                           ? 'bg-blue-600 text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500' 
                           : 'bg-gray-300 text-gray-500 cursor-not-allowed'
                       }`}
-                      title="Save Changes"
+                      title={generatingAI !== null ? "Generating AI content..." : "Save Changes"}
                     >
                       <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
@@ -1356,13 +1718,13 @@ const SetViewer = ({
                 {/* Save Button - 33.33% width */}
                 <button
                   onClick={handleSaveChanges}
-                  disabled={!hasUnsavedChanges}
+                  disabled={!hasUnsavedChanges || generatingAI !== null}
                   className={`flex-1 inline-flex items-center justify-center px-2 py-2 text-xs font-medium rounded-lg transition-all duration-200 shadow-sm hover:shadow-md ${
-                    hasUnsavedChanges 
+                    hasUnsavedChanges && generatingAI === null
                       ? 'bg-blue-600 text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500' 
                       : 'bg-gray-300 text-gray-500 cursor-not-allowed'
                   }`}
-                  title="Save Changes"
+                  title={generatingAI !== null ? "Generating AI content..." : "Save Changes"}
                 >
                   <svg className="w-4 h-4 sm:mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
@@ -1618,6 +1980,8 @@ const SetViewer = ({
               ? 'bg-green-500/90 text-white' 
               : notification.type === 'warning'
               ? 'bg-amber-500/90 text-white'
+              : notification.type === 'info'
+              ? 'bg-blue-500/90 text-white'
               : 'bg-red-500/90 text-white'
           }`}>
             <div className="flex items-center space-x-3 flex-1 min-w-0">
@@ -1628,6 +1992,10 @@ const SetViewer = ({
               ) : notification.type === 'warning' ? (
                 <svg className="w-5 h-5 text-white flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1-1.964-1-2.732 0L4.082 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              ) : notification.type === 'info' ? (
+                <svg className="w-5 h-5 text-white flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
               ) : (
                 <svg className="w-5 h-5 text-white flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">

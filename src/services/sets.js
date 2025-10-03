@@ -67,7 +67,9 @@ export const createSet = async (setData) => {
     .insert([{
       user_id: user.id,
       group_id: setData.group_id,
-      name: setData.name
+      name: setData.name,
+      source_language: setData.source_language || 'Auto-detect',
+      target_language: setData.target_language || 'English'
     }])
     .select()
     .single();

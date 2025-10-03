@@ -113,7 +113,12 @@ function App() {
         const wordsMismatch = updatedSet.word_count > 0 && 
                              (!activeSet.words || activeSet.words.length !== updatedSet.word_count);
         
-        if (wordCountChanged || wordsMismatch) {
+        // Check if we have temp cards (unsaved new cards)
+        const hasTempCards = activeSet.words && activeSet.words.some(w => w.id && w.id.startsWith('temp-'));
+        
+        if ((wordCountChanged || wordsMismatch) && !hasTempCards) {
+          // Only sync from database if we don't have unsaved temp cards
+          console.log('📡 Syncing activeSet from database (no temp cards)');
           // Fetch fresh words from database
           import('./services/words').then(({ fetchWordsBySet }) => {
             fetchWordsBySet(activeSetId).then(wordsData => {
@@ -125,6 +130,8 @@ function App() {
               console.error('Failed to fetch words for sync:', err);
             });
           });
+        } else if (hasTempCards) {
+          console.log('⏸️ Skipping database sync - have unsaved temp cards');
         }
       }
     }
@@ -436,7 +443,13 @@ function App() {
   };
 
   const handleUpdateSet = (updatedSet) => {
+    console.log('📦 handleUpdateSet called in MainApp');
+    console.log('Received updatedSet:', JSON.parse(JSON.stringify(updatedSet)));
+    console.log('Current activeSet before update:', JSON.parse(JSON.stringify(activeSet)));
+    
     setActiveSet(updatedSet);
+    
+    console.log('Called setActiveSet with new data');
     
     // Update in database if it exists (has an ID)
     if (updatedSet.id) {
@@ -444,7 +457,9 @@ function App() {
         setId: updatedSet.id,
         updates: {
           name: updatedSet.name,
-          group_id: updatedSet.group_id
+          group_id: updatedSet.group_id,
+          source_language: updatedSet.source_language,
+          target_language: updatedSet.target_language
         }
       });
     }
@@ -475,14 +490,8 @@ function App() {
   const handleCreateWord = async (wordData) => {
     try {
       const newWord = await createWordMutation.mutateAsync(wordData);
-      // React Query's optimistic update will handle the UI
-      // Just update activeSet with the new word from the response
-      if (activeSet && activeSet.id === wordData.set_id) {
-        setActiveSet(prev => ({
-          ...prev,
-          words: [...(prev.words || []), newWord]
-        }));
-      }
+      // Return the created word - SetViewer will handle updating the UI
+      // Don't update activeSet here to avoid race conditions with SetViewer's state management
       return newWord;
     } catch (err) {
       console.error('Failed to create word:', err);
@@ -559,13 +568,13 @@ function App() {
     
     console.log(`Resuming: ${uploadedCount} uploaded, ${unuploadedWords.length} remaining`);
     
-    // Parse unuploaded words for creation
+    // Parse unuploaded words for creation - include sentence data if available
     const wordsToCreate = unuploadedWords.map(queueWord => ({
       set_id: currentQueue.setId,
       word: queueWord.word,
       translation: queueWord.translation,
-      sentence: null,
-      sentence_translation: null,
+      sentence: queueWord.sentence || null,
+      sentence_translation: queueWord.sentenceTranslation || null,
       example: null,
       image_url: null,
       pronunciation: null,
@@ -748,14 +757,30 @@ function App() {
         // Create the set first (wait for it to get real ID)
         const createdSet = await createSetMutation.mutateAsync({
           group_id: groupId,
-          name: newSet.name
+          name: newSet.name,
+          source_language: newSet.source_language || 'Auto-detect',
+          target_language: newSet.target_language || 'English'
         });
         
-        // Parse all words and create upload queue
-        const wordCount = newSet.words.filter(w => w.trim()).length;
+        // Parse all words and create upload queue - handle both string and object formats
+        const wordCount = newSet.words.filter(w => typeof w === 'string' ? w.trim() : w).length;
         const wordsQueue = newSet.words
-          .filter(wordLine => wordLine.trim())
+          .filter(wordLine => typeof wordLine === 'string' ? wordLine.trim() : wordLine)
           .map((wordLine, index) => {
+            // Check if it's already an enriched object from AI processing
+            if (typeof wordLine === 'object' && wordLine.word) {
+              return {
+                id: `word_${index}`,
+                word: wordLine.word,
+                translation: wordLine.translation || '',
+                sentence: wordLine.sentence || null,
+                sentenceTranslation: wordLine.sentenceTranslation || null,
+                uploaded: false,
+                wordId: null
+              };
+            }
+            
+            // Otherwise parse the old string format
             const parts = wordLine.split('|').map(p => p.trim());
             const wordText = parts[0];
             const translation = parts[1] || '';
@@ -795,15 +820,32 @@ function App() {
 
         // Create words in background if any - use batched parallel execution
         if (newSet.words && newSet.words.length > 0) {
-          const wordCount = newSet.words.filter(w => w.trim()).length;
+          const wordCount = newSet.words.filter(w => typeof w === 'string' ? w.trim() : w).length;
           console.log('Creating', wordCount, 'words in batches...');
           const startTime = Date.now();
           
-          // Parse all words first
+          // Parse all words first - handle both string format and object format
           const parsedWords = newSet.words
-            .filter(wordLine => wordLine.trim())
+            .filter(wordLine => typeof wordLine === 'string' ? wordLine.trim() : wordLine)
             .map(wordLine => {
-              // Parse the word line - expecting format: "word|translation" or just "word"
+              // Check if it's already an enriched object from AI processing
+              if (typeof wordLine === 'object' && wordLine.word) {
+                return {
+                  set_id: createdSet.id,
+                  word: wordLine.word,
+                  translation: wordLine.translation || '',
+                  sentence: wordLine.sentence || null,
+                  sentence_translation: wordLine.sentenceTranslation || null,
+                  example: null,
+                  image_url: null,
+                  pronunciation: null,
+                  synonyms: [],
+                  antonyms: [],
+                  tags: []
+                };
+              }
+              
+              // Otherwise parse the old string format: "word|translation" or just "word"
               const parts = wordLine.split('|').map(p => p.trim());
               const wordText = parts[0];
               const translation = parts[1] || '';

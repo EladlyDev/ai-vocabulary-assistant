@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import BackToTop from './BackToTop';
+import { processWordsInBatches } from '../services/aiService';
 
 const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateGroup }) => {
   // Initialize from localStorage backup if available
@@ -22,6 +23,11 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
   });
   
   const [sourceLanguage, setSourceLanguage] = useState(() => {
+    // First priority: existing set's language
+    if (set?.source_language) {
+      return set.source_language;
+    }
+    // Second priority: localStorage backup
     const backup = localStorage.getItem('editorBackup');
     if (backup) {
       const parsed = JSON.parse(backup);
@@ -31,6 +37,11 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
   });
   
   const [targetLanguage, setTargetLanguage] = useState(() => {
+    // First priority: existing set's language
+    if (set?.target_language) {
+      return set.target_language;
+    }
+    // Second priority: localStorage backup
     const backup = localStorage.getItem('editorBackup');
     if (backup) {
       const parsed = JSON.parse(backup);
@@ -41,6 +52,10 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
   
   const [sourceDropdownOpen, setSourceDropdownOpen] = useState(false);
   const [targetDropdownOpen, setTargetDropdownOpen] = useState(false);
+  
+  // Language search states
+  const [sourceSearchQuery, setSourceSearchQuery] = useState('');
+  const [targetSearchQuery, setTargetSearchQuery] = useState('');
   
   const [selectedGroupId, setSelectedGroupId] = useState(() => {
     const backup = localStorage.getItem('editorBackup');
@@ -59,6 +74,12 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
   const [showUnsavedChangesModal, setShowUnsavedChangesModal] = useState(false);
   const [pendingAction, setPendingAction] = useState(null);
   const [showBackupRestored, setShowBackupRestored] = useState(false);
+  
+  // AI processing states
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generationError, setGenerationError] = useState(null);
+  const [generationProgress, setGenerationProgress] = useState({ current: 0, total: 0 });
+  const [processedWords, setProcessedWords] = useState([]); // Array of enriched word objects
   
   const sourceDropdownRef = useRef(null);
   const targetDropdownRef = useRef(null);
@@ -101,7 +122,80 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
     localStorage.setItem('editorBackup', JSON.stringify(backup));
   }, [title, words, sourceLanguage, targetLanguage, selectedGroupId]);
 
-  const languages = ['Spanish', 'French', 'German', 'English', 'Auto-detect'];
+  const allLanguages = [
+    'English',
+    'Spanish',
+    'French',
+    'German',
+    'Italian',
+    'Portuguese',
+    'Russian',
+    'Arabic',
+    'Chinese (Mandarin)',
+    'Japanese',
+    'Korean',
+    'Hindi',
+    'Turkish',
+    'Dutch',
+    'Polish',
+    'Swedish',
+    'Norwegian',
+    'Danish',
+    'Finnish',
+    'Greek',
+    'Hebrew',
+    'Thai',
+    'Vietnamese',
+    'Indonesian',
+    'Malay',
+    'Filipino',
+    'Ukrainian',
+    'Czech',
+    'Romanian',
+    'Hungarian',
+    'Persian (Farsi)',
+    'Urdu',
+    'Bengali',
+    'Tamil',
+    'Telugu',
+    'Swahili'
+  ];
+
+  // Get recent languages from localStorage
+  const getRecentLanguages = () => {
+    const recent = localStorage.getItem('recentLanguages');
+    return recent ? JSON.parse(recent) : ['English', 'Spanish', 'Arabic'];
+  };
+
+  // Save language to recent list
+  const saveToRecent = (language) => {
+    if (language === 'Auto-detect') return;
+    
+    let recent = getRecentLanguages();
+    // Remove if already exists
+    recent = recent.filter(lang => lang !== language);
+    // Add to beginning
+    recent.unshift(language);
+    // Keep only top 5
+    recent = recent.slice(0, 5);
+    localStorage.setItem('recentLanguages', JSON.stringify(recent));
+  };
+
+  // Filter languages based on search
+  const getFilteredLanguages = (searchQuery, includeRecent = true) => {
+    const recent = getRecentLanguages();
+    const filtered = allLanguages.filter(lang =>
+      lang.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+    
+    if (includeRecent && !searchQuery) {
+      // Show recent at top when no search query
+      const nonRecent = filtered.filter(lang => !recent.includes(lang));
+      return { recent, other: nonRecent };
+    }
+    
+    return { recent: [], other: filtered };
+  };
   
   // Memoize parsed words array - only recalculate when words string changes
   const wordsArray = useMemo(() => {
@@ -205,11 +299,21 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
   }, [hasUnsavedChanges, onBack]);
 
   const handleSaveChanges = () => {
-    if (title.trim() && wordsArray.length > 0) {
+    // Use processed words if available, otherwise fall back to simple words array
+    const dataToSave = processedWords.length > 0 ? processedWords : wordsArray;
+    
+    if (title.trim() && dataToSave.length > 0) {
+      const setData = {
+        name: title,
+        words: dataToSave,
+        source_language: sourceLanguage,
+        target_language: targetLanguage
+      };
+      
       if (set?.id) {
-        onUpdateSet({ ...set, name: title, words: wordsArray });
+        onUpdateSet({ ...set, ...setData });
       } else {
-        onSaveSet({ name: title, words: wordsArray }, selectedGroupId);
+        onSaveSet(setData, selectedGroupId);
       }
       
       // DON'T clear backup here - let the upload process handle it
@@ -218,12 +322,182 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
       // Update original set to reflect saved state
       const savedSet = {
         name: title,
-        words: wordsArray
+        words: dataToSave
       };
       const clonedSet = JSON.parse(JSON.stringify(savedSet));
       setOriginalSet(clonedSet);
       originalSetHash.current = JSON.stringify(clonedSet);
       setHasUnsavedChanges(false);
+    }
+  };
+
+  const handleProcessWords = async () => {
+    // Validate that we have words
+    if (!words.trim()) {
+      setGenerationError('Please add some words first before processing.');
+      return;
+    }
+
+    // Parse words from the textarea
+    const wordList = words.split('\n')
+      .map(line => line.trim())
+      .filter(line => line) // Remove empty lines
+      .map(line => {
+        // Extract just the word part (before | or the whole line if no |)
+        const parts = line.split('|');
+        return parts[0].trim();
+      })
+      .filter(word => word); // Remove empty words
+
+    if (wordList.length === 0) {
+      setGenerationError('No valid words found to process.');
+      return;
+    }
+
+    // Start processing
+    setIsGenerating(true);
+    setGenerationError(null);
+    setGenerationProgress({ current: 0, total: wordList.length });
+    setProcessedWords([]); // Clear previous results
+
+    try {
+      // Process words in batches with progress tracking
+      const result = await processWordsInBatches(
+        wordList,
+        sourceLanguage,
+        targetLanguage,
+        20, // chunk size
+        (current, total) => {
+          setGenerationProgress({ current, total });
+        }
+      );
+
+      // Convert to array of enriched word objects for display
+      const enrichedWords = Object.keys(result.words).map(word => ({
+        word: word,
+        translation: result.words[word].translation,
+        sentence: result.words[word].sentence,
+        sentenceTranslation: result.words[word].sentenceTranslation
+      }));
+
+      setProcessedWords(enrichedWords);
+      setIsGenerating(false);
+      
+      // Show success message briefly
+      setTimeout(() => {
+        setGenerationProgress({ current: 0, total: 0 });
+      }, 2000);
+    } catch (error) {
+      setGenerationError(error.message || 'Failed to process words. Please try again.');
+      setIsGenerating(false);
+      setGenerationProgress({ current: 0, total: 0 });
+    }
+  };
+
+  const handlePlayPronunciation = (word, language) => {
+    // Use Web Speech API to pronounce the word
+    if ('speechSynthesis' in window) {
+      // Cancel any ongoing speech
+      window.speechSynthesis.cancel();
+      
+      const utterance = new SpeechSynthesisUtterance(word);
+      
+      // Comprehensive language codes mapping
+      const languageCodes = {
+        'English': 'en-US',
+        'Spanish': 'es-ES',
+        'French': 'fr-FR',
+        'German': 'de-DE',
+        'Italian': 'it-IT',
+        'Portuguese': 'pt-PT',
+        'Russian': 'ru-RU',
+        'Arabic': 'ar-SA',
+        'Chinese (Mandarin)': 'zh-CN',
+        'Japanese': 'ja-JP',
+        'Korean': 'ko-KR',
+        'Hindi': 'hi-IN',
+        'Turkish': 'tr-TR',
+        'Dutch': 'nl-NL',
+        'Polish': 'pl-PL',
+        'Swedish': 'sv-SE',
+        'Norwegian': 'no-NO',
+        'Danish': 'da-DK',
+        'Finnish': 'fi-FI',
+        'Greek': 'el-GR',
+        'Hebrew': 'he-IL',
+        'Thai': 'th-TH',
+        'Vietnamese': 'vi-VN',
+        'Indonesian': 'id-ID',
+        'Malay': 'ms-MY',
+        'Filipino': 'fil-PH',
+        'Ukrainian': 'uk-UA',
+        'Czech': 'cs-CZ',
+        'Romanian': 'ro-RO',
+        'Hungarian': 'hu-HU',
+        'Persian (Farsi)': 'fa-IR',
+        'Urdu': 'ur-PK',
+        'Bengali': 'bn-BD',
+        'Tamil': 'ta-IN',
+        'Telugu': 'te-IN',
+        'Swahili': 'sw-KE'
+      };
+      
+      const langCode = languageCodes[language] || 'en-US';
+      utterance.lang = langCode;
+      utterance.rate = 0.85; // Slightly slower for learning
+      utterance.pitch = 1;
+      utterance.volume = 1;
+      
+      // Wait for voices to be loaded (important for some browsers, especially for Arabic)
+      const speakWithVoice = () => {
+        const voices = window.speechSynthesis.getVoices();
+        
+        // For Arabic, try multiple approaches
+        if (language === 'Arabic') {
+          // Try to find Arabic voice with various patterns
+          let voice = voices.find(v => v.lang === 'ar-SA') ||
+                      voices.find(v => v.lang.startsWith('ar-')) ||
+                      voices.find(v => v.lang.includes('ar')) ||
+                      voices.find(v => v.name.toLowerCase().includes('arabic'));
+          
+          if (voice) {
+            utterance.voice = voice;
+          }
+        } else {
+          // For other languages, find matching voice
+          const langPrefix = langCode.split('-')[0];
+          const voice = voices.find(v => v.lang === langCode) ||
+                       voices.find(v => v.lang.startsWith(langPrefix));
+          
+          if (voice) {
+            utterance.voice = voice;
+          }
+        }
+        
+        // Small delay before speaking (helps with some browsers)
+        setTimeout(() => {
+          window.speechSynthesis.speak(utterance);
+        }, 100);
+      };
+      
+      // Check if voices are already loaded
+      const voices = window.speechSynthesis.getVoices();
+      if (voices.length > 0) {
+        speakWithVoice();
+      } else {
+        // Wait for voices to load (critical for Arabic and other languages)
+        window.speechSynthesis.onvoiceschanged = () => {
+          speakWithVoice();
+          window.speechSynthesis.onvoiceschanged = null; // Clean up
+        };
+        
+        // Fallback: Try after 500ms even if event doesn't fire
+        setTimeout(() => {
+          if (window.speechSynthesis.getVoices().length > 0) {
+            speakWithVoice();
+          }
+        }, 500);
+      }
     }
   };
 
@@ -483,7 +757,10 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
                 </label>
                 <div className="relative" ref={sourceDropdownRef}>
                   <button
-                    onClick={() => setSourceDropdownOpen(!sourceDropdownOpen)}
+                    onClick={() => {
+                      setSourceDropdownOpen(!sourceDropdownOpen);
+                      setSourceSearchQuery('');
+                    }}
                     className="w-full bg-white border-2 border-gray-200 rounded-xl px-4 py-3 text-left focus:border-blue-500 focus:ring-0 transition-all duration-200 hover:border-gray-300 text-gray-700 font-medium flex items-center justify-between"
                   >
                     <span>{sourceLanguage}</span>
@@ -492,19 +769,99 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
                     </svg>
                   </button>
                   {sourceDropdownOpen && (
-                    <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-50 py-1">
-                      {languages.map((lang) => (
-                        <button
-                          key={lang}
-                          onClick={() => {
-                            setSourceLanguage(lang);
-                            setSourceDropdownOpen(false);
-                          }}
-                          className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors duration-150 text-gray-700 font-medium"
-                        >
-                          {lang}
-                        </button>
-                      ))}
+                    <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-50 py-1 max-h-80 overflow-hidden flex flex-col">
+                      {/* Search Input */}
+                      <div className="px-3 py-2 border-b border-gray-200 sticky top-0 bg-white">
+                        <input
+                          type="text"
+                          placeholder="Search languages..."
+                          value={sourceSearchQuery}
+                          onChange={(e) => setSourceSearchQuery(e.target.value)}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      </div>
+                      
+                      {/* Language List - Scrollable */}
+                      <div className="overflow-y-auto max-h-64">
+                        {(() => {
+                          const { recent, other } = getFilteredLanguages(sourceSearchQuery);
+                          const hasResults = recent.length > 0 || other.length > 0;
+                          
+                          if (!hasResults) {
+                            return (
+                              <div className="px-4 py-3 text-gray-500 text-sm text-center">
+                                No languages found
+                              </div>
+                            );
+                          }
+                          
+                          return (
+                            <>
+                              {/* Auto-detect option */}
+                              {!sourceSearchQuery && (
+                                <>
+                                  <button
+                                    onClick={() => {
+                                      setSourceLanguage('Auto-detect');
+                                      setSourceDropdownOpen(false);
+                                    }}
+                                    className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors duration-150 text-gray-700 font-medium border-b border-gray-100"
+                                  >
+                                    <span className="text-blue-600">🔄</span> Auto-detect
+                                  </button>
+                                </>
+                              )}
+                              
+                              {/* Recent Languages */}
+                              {recent.length > 0 && (
+                                <>
+                                  <div className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider bg-gray-50">
+                                    Recent
+                                  </div>
+                                  {recent.map((lang) => (
+                                    <button
+                                      key={lang}
+                                      onClick={() => {
+                                        setSourceLanguage(lang);
+                                        saveToRecent(lang);
+                                        setSourceDropdownOpen(false);
+                                      }}
+                                      className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors duration-150 text-gray-700 font-medium"
+                                    >
+                                      <span className="text-blue-600">⭐</span> {lang}
+                                    </button>
+                                  ))}
+                                </>
+                              )}
+                              
+                              {/* All Other Languages */}
+                              {other.length > 0 && (
+                                <>
+                                  {recent.length > 0 && (
+                                    <div className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider bg-gray-50">
+                                      All Languages
+                                    </div>
+                                  )}
+                                  {other.map((lang) => (
+                                    <button
+                                      key={lang}
+                                      onClick={() => {
+                                        setSourceLanguage(lang);
+                                        saveToRecent(lang);
+                                        setSourceDropdownOpen(false);
+                                      }}
+                                      className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors duration-150 text-gray-700 font-medium"
+                                    >
+                                      {lang}
+                                    </button>
+                                  ))}
+                                </>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -515,7 +872,10 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
                 </label>
                 <div className="relative" ref={targetDropdownRef}>
                   <button
-                    onClick={() => setTargetDropdownOpen(!targetDropdownOpen)}
+                    onClick={() => {
+                      setTargetDropdownOpen(!targetDropdownOpen);
+                      setTargetSearchQuery('');
+                    }}
                     className="w-full bg-white border-2 border-gray-200 rounded-xl px-4 py-3 text-left focus:border-blue-500 focus:ring-0 transition-all duration-200 hover:border-gray-300 text-gray-700 font-medium flex items-center justify-between"
                   >
                     <span>{targetLanguage}</span>
@@ -524,19 +884,84 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
                     </svg>
                   </button>
                   {targetDropdownOpen && (
-                    <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-50 py-1">
-                      {languages.filter(lang => lang !== 'Auto-detect').map((lang) => (
-                        <button
-                          key={lang}
-                          onClick={() => {
-                            setTargetLanguage(lang);
-                            setTargetDropdownOpen(false);
-                          }}
-                          className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors duration-150 text-gray-700 font-medium"
-                        >
-                          {lang}
-                        </button>
-                      ))}
+                    <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-50 py-1 max-h-80 overflow-hidden flex flex-col">
+                      {/* Search Input */}
+                      <div className="px-3 py-2 border-b border-gray-200 sticky top-0 bg-white">
+                        <input
+                          type="text"
+                          placeholder="Search languages..."
+                          value={targetSearchQuery}
+                          onChange={(e) => setTargetSearchQuery(e.target.value)}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      </div>
+                      
+                      {/* Language List - Scrollable */}
+                      <div className="overflow-y-auto max-h-64">
+                        {(() => {
+                          const { recent, other } = getFilteredLanguages(targetSearchQuery);
+                          const hasResults = recent.length > 0 || other.length > 0;
+                          
+                          if (!hasResults) {
+                            return (
+                              <div className="px-4 py-3 text-gray-500 text-sm text-center">
+                                No languages found
+                              </div>
+                            );
+                          }
+                          
+                          return (
+                            <>
+                              {/* Recent Languages */}
+                              {recent.length > 0 && (
+                                <>
+                                  <div className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider bg-gray-50">
+                                    Recent
+                                  </div>
+                                  {recent.map((lang) => (
+                                    <button
+                                      key={lang}
+                                      onClick={() => {
+                                        setTargetLanguage(lang);
+                                        saveToRecent(lang);
+                                        setTargetDropdownOpen(false);
+                                      }}
+                                      className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors duration-150 text-gray-700 font-medium"
+                                    >
+                                      <span className="text-blue-600">⭐</span> {lang}
+                                    </button>
+                                  ))}
+                                </>
+                              )}
+                              
+                              {/* All Other Languages */}
+                              {other.length > 0 && (
+                                <>
+                                  {recent.length > 0 && (
+                                    <div className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider bg-gray-50">
+                                      All Languages
+                                    </div>
+                                  )}
+                                  {other.map((lang) => (
+                                    <button
+                                      key={lang}
+                                      onClick={() => {
+                                        setTargetLanguage(lang);
+                                        saveToRecent(lang);
+                                        setTargetDropdownOpen(false);
+                                      }}
+                                      className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors duration-150 text-gray-700 font-medium"
+                                    >
+                                      {lang}
+                                    </button>
+                                  ))}
+                                </>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -573,14 +998,80 @@ leer"
               </div>
             </div>
             
-            <div className="mt-6 flex flex-col sm:flex-row gap-4">
-              <button className="group relative bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white px-6 py-3 rounded-xl font-semibold transition-all duration-200 transform hover:scale-105 flex items-center w-full sm:w-auto justify-center">
-                <svg className="w-5 h-5 mr-2 transition-transform duration-200 group-hover:scale-110" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+            {/* AI Generation Error Message */}
+            {generationError && (
+              <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-xl flex items-start">
+                <svg className="w-5 h-5 text-red-500 mr-3 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
-                Process Words
+                <div>
+                  <p className="text-sm font-medium text-red-800">{generationError}</p>
+                  <button
+                    onClick={() => setGenerationError(null)}
+                    className="text-xs text-red-600 hover:text-red-800 mt-1 underline"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* AI Generation Progress */}
+            {isGenerating && generationProgress.total > 0 && (
+              <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-xl">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium text-blue-800">
+                    Generating sentences with AI...
+                  </span>
+                  <span className="text-sm text-blue-600">
+                    {generationProgress.current} / {generationProgress.total}
+                  </span>
+                </div>
+                <div className="w-full bg-blue-200 rounded-full h-2">
+                  <div
+                    className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                    style={{ width: `${(generationProgress.current / generationProgress.total) * 100}%` }}
+                  ></div>
+                </div>
+              </div>
+            )}
+
+            {/* Success Message */}
+            {!isGenerating && generationProgress.current > 0 && generationProgress.current === generationProgress.total && (
+              <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-xl flex items-center">
+                <svg className="w-5 h-5 text-green-500 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                <p className="text-sm font-medium text-green-800">
+                  ✨ Successfully generated {generationProgress.total} sentences!
+                </p>
+              </div>
+            )}
+            
+            <div className="mt-6 flex flex-col sm:flex-row gap-4">
+              {/* AI Process Words Button */}
+              <button
+                onClick={handleProcessWords}
+                disabled={isGenerating || !words.trim()}
+                className="group relative bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 disabled:from-gray-400 disabled:to-gray-500 disabled:cursor-not-allowed text-white px-6 py-3 rounded-xl font-semibold transition-all duration-200 transform hover:scale-105 disabled:hover:scale-100 flex items-center w-full sm:w-auto justify-center"
+              >
+                {isGenerating ? (
+                  <>
+                    <svg className="w-5 h-5 mr-2 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Processing...
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-5 h-5 mr-2 transition-transform duration-200 group-hover:rotate-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
+                    </svg>
+                    Process Words with AI
+                  </>
+                )}
               </button>
-              
             </div>
           </div>
 
@@ -591,68 +1082,92 @@ leer"
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
               </svg>
-              Preview: Enriched Word Card
+              {processedWords.length > 0 ? `Preview: ${processedWords.length} Enriched Words` : 'Preview: Enriched Word Cards'}
             </h2>
             
-            <div className="max-w-md">
-              <div className="bg-gradient-to-br from-white to-gray-50 border-2 border-gray-200 rounded-xl p-6 shadow-md hover:shadow-lg transition-all duration-200">
-                
-                {/* Image */}
-                <div className="mb-6">
-                  <div className="relative group">
-                    <img
-                      src={mockEnrichedWord.imageUrl}
-                      alt={mockEnrichedWord.word}
-                      className="w-full h-40 object-cover rounded-xl shadow-md"
-                    />
-                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-all duration-200 rounded-xl"></div>
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <button className="text-xs px-3 py-1 bg-blue-100 text-blue-700 rounded-full hover:bg-blue-200 transition-colors font-medium">
-                      Next Image
-                    </button>
-                    <button className="text-xs px-3 py-1 bg-gray-100 text-gray-700 rounded-full hover:bg-gray-200 transition-colors font-medium">
-                      Upload Custom
-                    </button>
-                    <button className="text-xs px-3 py-1 bg-red-100 text-red-700 rounded-full hover:bg-red-200 transition-colors font-medium">
-                      Remove
-                    </button>
-                  </div>
-                </div>
+            {processedWords.length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {processedWords.map((wordData, index) => (
+                  <div key={index} className="bg-gradient-to-br from-white to-gray-50 border-2 border-gray-200 rounded-xl p-6 shadow-md hover:shadow-lg transition-all duration-200">
+                    
+                    {/* Image Placeholder (for Phase 3D - Google Custom Search) */}
+                    <div className="mb-6">
+                      <div className="relative group">
+                        <div className="w-full h-40 bg-gradient-to-br from-gray-200 to-gray-300 rounded-xl flex items-center justify-center">
+                          <div className="text-center text-gray-500">
+                            <svg className="w-12 h-12 mx-auto mb-2 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                            </svg>
+                            <p className="text-xs font-medium">Image (Phase 3D)</p>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button disabled className="text-xs px-3 py-1 bg-gray-100 text-gray-400 rounded-full cursor-not-allowed font-medium">
+                          Next Image
+                        </button>
+                        <button disabled className="text-xs px-3 py-1 bg-gray-100 text-gray-400 rounded-full cursor-not-allowed font-medium">
+                          Upload Custom
+                        </button>
+                      </div>
+                    </div>
 
-                {/* Word */}
-                <div className="mb-4">
-                  <h3 className="text-2xl font-bold text-gray-900 text-center">
-                    {mockEnrichedWord.word}
-                  </h3>
-                </div>
+                    {/* Word */}
+                    <div className="mb-4">
+                      <h3 className="text-2xl font-bold text-gray-900 text-center mb-2">
+                        {wordData.word}
+                      </h3>
+                      <p className="text-lg text-blue-600 text-center font-medium">
+                        {wordData.translation}
+                      </p>
+                    </div>
 
-                {/* Sentence */}
-                <div className="mb-6">
-                  <div className="bg-blue-50 rounded-xl p-4 border border-blue-100">
-                    <p className="text-gray-700 italic text-center leading-relaxed">
-                      "{mockEnrichedWord.sentence}"
-                    </p>
+                    {/* Sentence in source language */}
+                    <div className="mb-4">
+                      <div className="bg-blue-50 rounded-xl p-4 border border-blue-100">
+                        <p className="text-gray-700 italic text-center leading-relaxed text-sm">
+                          "{wordData.sentence}"
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Sentence translation */}
+                    <div className="mb-4">
+                      <div className="bg-green-50 rounded-xl p-4 border border-green-100">
+                        <p className="text-gray-600 text-center leading-relaxed text-sm">
+                          "{wordData.sentenceTranslation}"
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Audio button */}
+                    <div className="text-center">
+                      <button 
+                        onClick={() => handlePlayPronunciation(wordData.word, sourceLanguage)}
+                        className="group bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white p-3 rounded-full shadow-md hover:shadow-lg transition-all duration-200 transform hover:scale-105"
+                      >
+                        <svg className="w-5 h-5 transition-transform duration-200 group-hover:scale-110" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" />
+                        </svg>
+                      </button>
+                      <p className="text-xs text-gray-600 mt-2 font-medium">Play pronunciation</p>
+                    </div>
                   </div>
-                  <button className="text-sm text-blue-600 hover:text-blue-800 mt-2 font-medium flex items-center mx-auto">
-                    <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                ))}
+              </div>
+            ) : (
+              <div className="max-w-md">
+                <div className="bg-gradient-to-br from-white to-gray-50 border-2 border-gray-200 rounded-xl p-6 shadow-md">
+                  <div className="text-center text-gray-500">
+                    <svg className="w-16 h-16 mx-auto mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
                     </svg>
-                    Regenerate sentence
-                  </button>
-                </div>
-
-                {/* Audio */}
-                <div className="text-center">
-                  <button className="group bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white p-4 rounded-full shadow-md hover:shadow-lg transition-all duration-200 transform hover:scale-105">
-                    <svg className="w-6 h-6 transition-transform duration-200 group-hover:scale-110" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" />
-                    </svg>
-                  </button>
-                  <p className="text-sm text-gray-600 mt-2 font-medium">Play pronunciation</p>
+                    <p className="text-lg font-medium mb-2">No words processed yet</p>
+                    <p className="text-sm">Add words and click "Process Words with AI" to see enriched cards here</p>
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
 
