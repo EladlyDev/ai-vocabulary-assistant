@@ -52,6 +52,7 @@ export const createWord = async (wordData) => {
     synonyms: wordData.synonyms || [],
     antonyms: wordData.antonyms || [],
     position: wordData.position || 0, // Default to 0 instead of null
+    // Skip english_translation as the column doesn't exist in the database
   };
 
   const { data, error } = await supabase
@@ -73,7 +74,7 @@ export const createWord = async (wordData) => {
  */
 export const updateWord = async (wordId, updates) => {
   // Remove fields that shouldn't be updated (but allow set_id to be updated for moving words)
-  const { id, user_id, created_at, translation, sentenceTranslation, image, ...safeUpdates } = updates;
+  const { id, user_id, created_at, translation, sentenceTranslation, image, englishTranslation, ...safeUpdates } = updates;
   
   // Map UI fields to database fields
   const dbUpdates = {
@@ -96,6 +97,16 @@ export const updateWord = async (wordId, updates) => {
     dbUpdates.image_url = image;
   }
   
+  // Only include english_translation if we know the column exists in the database
+  // Currently, we'll skip this since the column doesn't exist yet
+  // If you need to store this data, consider adding it to a separate table or JSON field
+  // or run a database migration to add this column
+  /* 
+  if (englishTranslation !== undefined) {
+    dbUpdates.english_translation = englishTranslation;
+  }
+  */
+  
   const { data, error } = await supabase
     .from('words')
     .update(dbUpdates)
@@ -113,7 +124,8 @@ export const updateWord = async (wordId, updates) => {
     ...data,
     translation: data.definition,
     sentenceTranslation: data.sentence_translation,
-    image: data.image_url
+    image: data.image_url,
+    englishTranslation: data.english_translation
   };
 };
 

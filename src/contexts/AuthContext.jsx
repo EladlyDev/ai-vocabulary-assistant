@@ -30,6 +30,13 @@ export const AuthProvider = ({ children }) => {
     } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
       setUser(session?.user ?? null);
+      
+      // If this is a SIGN_UP event (not just any sign in), reset preferences
+      if (session?.user && _event === 'SIGNED_UP') {
+        // Clear any language preferences for new users only
+        localStorage.removeItem('recentLanguages');
+      }
+      
       setLoading(false);
     });
 

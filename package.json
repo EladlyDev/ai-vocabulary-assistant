@@ -1,7 +1,7 @@
 {
-  "name": "vocabulary-assistant",
+  "name": "hizma",
   "version": "0.1.0",
-  "description": "A modern vocabulary learning application built with React and Tailwind CSS",
+  "description": "Hizma - A modern vocabulary learning application built with React and Tailwind CSS",
   "private": true,
   "dependencies": {
     "@google/generative-ai": "^0.24.1",

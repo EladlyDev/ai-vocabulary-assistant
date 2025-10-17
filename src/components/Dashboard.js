@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import ExportModal from './ExportModal';
 import BackToTop from './BackToTop';
+import hizmaLogo from '../assets/hizma-logo.png';
 
 const Dashboard = ({ onCreateNewSet, onOpenSet, groups, mockSets, onCreateGroup, onUpdateGroup, onDeleteGroup, onDeleteSet, onMoveSetToGroup }) => {
   const { user, signOut } = useAuth();
@@ -341,19 +342,20 @@ const Dashboard = ({ onCreateNewSet, onOpenSet, groups, mockSets, onCreateGroup,
         
         {/* Hero Section */}
         <div className="text-center mb-8 sm:mb-12">
+          <div className="flex items-center justify-center mb-4">
+            <img src={hizmaLogo} alt="Hizma Logo" className="h-16 sm:h-20 lg:h-24 w-auto" />
+          </div>
           <h1 className="text-3xl sm:text-4xl lg:text-5xl xl:text-6xl font-bold text-gray-900 mb-3 sm:mb-4">
             <span className="bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-              AI Vocabulary
+              Hizma
             </span>
-            <br />
-            Assistant
           </h1>
           <p className="text-lg sm:text-xl text-gray-600 max-w-2xl mx-auto mb-6 sm:mb-8 px-4">
-            Build, organize, and master your vocabulary with our intelligent learning platform
+            Build your vocabulary 10x faster. Perfect sentences, audio, and images in seconds.
           </p>
           
           <button
-            onClick={onCreateNewSet}
+            onClick={() => onCreateNewSet(null)}
             className="group inline-flex items-center px-6 sm:px-8 py-3 sm:py-4 bg-gradient-to-r from-blue-600 to-purple-600 text-white text-base sm:text-lg font-semibold rounded-xl sm:rounded-2xl hover:from-blue-700 hover:to-purple-700 transition-all duration-200 shadow-lg hover:shadow-xl transform hover:-translate-y-0.5"
           >
             <svg className="w-5 h-5 sm:w-6 sm:h-6 mr-2 sm:mr-3 transition-transform duration-200 group-hover:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -657,7 +659,7 @@ const Dashboard = ({ onCreateNewSet, onOpenSet, groups, mockSets, onCreateGroup,
                           <h3 className="text-sm sm:text-base font-medium text-gray-500 mb-2">No sets in this group yet</h3>
                           <p className="text-xs sm:text-sm text-gray-400 mb-3 sm:mb-4">Add your first vocabulary set to this group</p>
                           <button
-                            onClick={onCreateNewSet}
+                            onClick={() => onCreateNewSet(group.id)} /* Pass the group ID to pre-select it */
                             className="group inline-flex items-center px-3 sm:px-4 py-2 bg-gradient-to-r from-blue-600 to-purple-600 text-white text-sm rounded-lg hover:from-blue-700 hover:to-purple-700 transition-all duration-200 shadow-md hover:shadow-lg"
                           >
                             <svg className="w-3 h-3 sm:w-4 sm:h-4 mr-2 transition-transform duration-200 group-hover:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
