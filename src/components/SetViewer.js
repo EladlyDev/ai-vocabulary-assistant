@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import ExportModal from './ExportModal';
 import BackToTop from './BackToTop';
+import ImageSelector from './ImageSelector';
 import { processWordsWithAI } from '../services/aiService';
 
 const SetViewer = ({ 
@@ -17,6 +18,7 @@ const SetViewer = ({
   onSearchChange,
   isUpdatingWord,
   isDeletingWord,
+  uploadInProgress,
   onUnsavedChangesChange
 }) => {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -32,11 +34,17 @@ const SetViewer = ({
   const [generatingAI, setGeneratingAI] = useState(null); // Track which card+field is generating: {cardIndex, field}
   const newCardRef = useRef(null); // Reference to scroll to new card
   const [notification, setNotification] = useState(null);
+  
+  // Image search state - lifted up to prevent loss on re-render
+  const [imageSearchResults, setImageSearchResults] = useState({}); // {cardIndex: {results: [], selectedIndex: 0}}
   const [showNotification, setShowNotification] = useState(false);
   
   // Delete word confirmation
   const [wordToDelete, setWordToDelete] = useState(null);
   const [showDeleteWordConfirm, setShowDeleteWordConfirm] = useState(false);
+  
+  // Image selection state
+  const [showImageSelector, setShowImageSelector] = useState(null); // cardIndex of card showing image selector
   
   // Pagination state
   const [visibleCount, setVisibleCount] = useState(30);
@@ -58,16 +66,57 @@ const SetViewer = ({
   }, [onUnsavedChangesChange]);
 
   // Track original state for change detection
+  // Initialize ONLY when set ID changes or component mounts
+  const setIdRef = useRef(null);
+  const justSavedRef = useRef(false); // Track if we just saved
+  const lastSaveTimestamp = useRef(0); // Track when we last saved
+  const saveTimeoutRef = useRef(null); // Timeout to reset justSavedRef
+  
   useEffect(() => {
-    // Always update originalSet when set changes and has words
-    const clonedSet = JSON.parse(JSON.stringify(set));
+    const currentSetId = set?.id;
     
-    // Initialize if not set, or if originalSet has no words but current set does
-    if (!originalSet || (originalSet && (!originalSet.words || originalSet.words.length === 0) && set.words && set.words.length > 0)) {
+    // ONLY initialize originalSet when:
+    // 1. First mount (setIdRef is null) AND set is fully loaded
+    // 2. Set ID actually changed (switched to a different set) AND set is fully loaded
+    // 3. Just saved and parent updated the set (sync with new data from DB)
+    // 4. Upload in progress (words being added after new set creation)
+    if (currentSetId !== setIdRef.current) {
+      // Wait for set to be fully loaded (has words array, even if empty)
+      // Don't initialize with incomplete data
+      if (!set.words) {
+        console.log('📌 Skipping originalSet init - set not fully loaded yet');
+        return;
+      }
+      const clonedSet = JSON.parse(JSON.stringify(set));
+      console.log('📌 Initializing originalSet - ID changed from', setIdRef.current, 'to', currentSetId, '- words:', set.words?.length);
+      setOriginalSet(clonedSet);
+      originalSetHash.current = JSON.stringify(clonedSet);
+      setIdRef.current = currentSetId;
+    } else if (justSavedRef.current) {
+      // Parent updated set after our save - sync originalSet with the new data
+      const clonedSet = JSON.parse(JSON.stringify(set));
+      console.log('📌 Syncing originalSet after save - parent updated set');
+      setOriginalSet(clonedSet);
+      originalSetHash.current = JSON.stringify(clonedSet);
+      // Don't reset justSavedRef immediately - let timeout handle it
+      // This allows multiple updates from mutation callbacks to be caught
+    } else if (uploadInProgress) {
+      // Upload in progress - sync originalSet with incoming words to avoid "unsaved changes"
+      const clonedSet = JSON.parse(JSON.stringify(set));
+      console.log('📌 Syncing originalSet during upload - words being added');
       setOriginalSet(clonedSet);
       originalSetHash.current = JSON.stringify(clonedSet);
     }
-  }, [set, originalSet]);
+  }, [set?.id, set, uploadInProgress]); // Depend on ID, set object, and upload status
+  
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // Optimized change detection using memoization
   const checkForChanges = useCallback(() => {
@@ -122,15 +171,21 @@ const SetViewer = ({
     }
     
     // Check if the set has changed from its original state
-    // Use cached hash comparison for better performance
     const currentHash = JSON.stringify(set);
-    if (setHash.current !== currentHash) {
-      setHash.current = currentHash;
-      return currentHash !== originalSetHash.current;
-    }
+    const originalHash = originalSetHash.current;
     
-    // No changes detected
-    return false;
+    console.log('🔍 Hash comparison:', {
+      currentHashLength: currentHash.length,
+      originalHashLength: originalHash?.length,
+      areEqual: currentHash === originalHash,
+      setWordsCount: set.words?.length,
+      originalWordsCount: originalSet?.words?.length
+    });
+    
+    // Simply compare current set with original - don't cache current hash here!
+    const hasChanges = currentHash !== originalHash;
+    console.log('🔍 Has changes:', hasChanges);
+    return hasChanges;
   }, [set, originalSet, isCreatingNewCard, editingCard, editingField, editingValue]);
 
   // Detect changes with optimized comparison
@@ -140,29 +195,115 @@ const SetViewer = ({
       return;
     }
     
+    // Check if we saved recently (within last 2 seconds)
+    const justSaved = justSavedRef.current || (Date.now() - lastSaveTimestamp.current < 2000);
+    
+    // Skip change detection if we just saved
+    if (justSaved) {
+      console.log('💾 Skipping change detection - just saved recently');
+      
+      // If we have unsaved changes flag but just saved, reset it
+      if (hasUnsavedChanges) {
+        console.log('💾 Resetting hasUnsavedChanges after save');
+        setHasUnsavedChanges(false);
+        
+        // Notify parent component about unsaved changes being reset
+        if (onUnsavedChangesChangeRef.current) {
+          onUnsavedChangesChangeRef.current(false);
+        }
+      }
+      return;
+    }
+    
     const hasChanges = checkForChanges();
+    console.log('💾 Change detection:', { hasChanges, hasUnsavedChanges });
     
     if (hasChanges !== hasUnsavedChanges) {
+      console.log('💾 Updating hasUnsavedChanges to:', hasChanges);
       setHasUnsavedChanges(hasChanges);
       // Notify parent component about unsaved changes using ref
       if (onUnsavedChangesChangeRef.current) {
         onUnsavedChangesChangeRef.current(hasChanges);
       }
     }
-  }, [set, checkForChanges, hasUnsavedChanges]);
+  }, [set, checkForChanges, hasUnsavedChanges, justSavedRef.current]);
 
   // Prevent navigation with unsaved changes
   useEffect(() => {
     const handleBeforeUnload = (e) => {
-      if (hasUnsavedChanges) {
+      // Check if we saved recently (within last 3 seconds)
+      const justSaved = justSavedRef.current || (Date.now() - lastSaveTimestamp.current < 3000);
+      
+      // Skip the warning if we just saved or there are no unsaved changes
+      if (hasUnsavedChanges && !justSaved) {
+        console.log('⚠️ Preventing navigation - unsaved changes detected');
         e.preventDefault();
         e.returnValue = '';
+      } else {
+        console.log('✅ Allowing navigation - no unsaved changes or just saved');
       }
     };
 
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [hasUnsavedChanges]);
+  
+  // Handle browser back button via history API
+  useEffect(() => {
+    // Special function to check if we really have unsaved changes
+    const hasRealUnsavedChanges = () => {
+      // If we explicitly saved in the last 5 seconds, always treat as saved
+      if (Date.now() - lastSaveTimestamp.current < 5000) {
+        return false;
+      }
+      
+      // If justSavedRef is still true, always treat as saved
+      if (justSavedRef.current) {
+        return false;
+      }
+      
+      // Manually check for changes to be super safe
+      if (!set || !originalSet) return false;
+      
+      const currentHash = JSON.stringify(set);
+      const originalHash = originalSetHash.current;
+      
+      // Simply compare current set with original
+      return currentHash !== originalHash;
+    };
+    
+    const handlePopState = (event) => {
+      // Only check for real unsaved changes
+      if (hasRealUnsavedChanges()) {
+        // If there are unsaved changes, prevent navigation
+        console.log('⚠️ Browser back button - unsaved changes detected');
+        
+        // This is a last resort - we need to try to stay on the page
+        window.history.pushState({ preventNavigation: true }, '');
+        
+        // Show the unsaved changes modal to give user a choice
+        setPendingAction('back');
+        setShowUnsavedChangesModal(true);
+      } else {
+        // If no unsaved changes or just saved, allow navigation
+        console.log('✅ Browser back button - allowing navigation');
+        // We'll let the browser handle this navigation naturally
+        
+        // If it's from our app state, call onBack
+        if (window.history.state && window.history.state.preventNavigation) {
+          onBack();
+        }
+      }
+    };
+
+    // Push a state so we have something to go back to
+    window.history.pushState({ preventNavigation: true }, '');
+    window.addEventListener('popstate', handlePopState);
+    
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [hasUnsavedChanges, set, originalSet]);
   
   // Cleanup debounce timer on unmount
   useEffect(() => {
@@ -188,10 +329,19 @@ const SetViewer = ({
   };
 
   const handleBack = () => {
-    if (hasUnsavedChanges) {
+    // Check if we saved recently (within last 3 seconds)
+    const justSaved = justSavedRef.current || (Date.now() - lastSaveTimestamp.current < 3000);
+    
+    // If we just saved, we definitely want to allow navigation
+    if (justSaved) {
+      console.log('🔙 Back button pressed - just saved, allowing navigation');
+      onBack();
+    } else if (hasUnsavedChanges) {
+      console.log('🔙 Back button pressed - has unsaved changes, showing modal');
       setPendingAction('back');
       setShowUnsavedChangesModal(true);
     } else {
+      console.log('🔙 Back button pressed - no unsaved changes, allowing navigation');
       onBack();
     }
   };
@@ -296,6 +446,8 @@ const SetViewer = ({
             onCreateWord({
               set_id: set.id,
               word: wordObj.word,
+              // Skip english_translation as the column doesn't exist in the database
+              // We'll store the English translation in memory but not in the DB for now
               translation: wordObj.translation || '',
               sentence: wordObj.sentence || null,
               sentence_translation: wordObj.sentenceTranslation || null,
@@ -315,6 +467,7 @@ const SetViewer = ({
           if (originalWord && wordObj.id) {
             const hasChanged = 
               wordObj.word !== originalWord.word ||
+              wordObj.englishTranslation !== originalWord.englishTranslation ||
               wordObj.translation !== originalWord.translation ||
               wordObj.sentence !== originalWord.sentence ||
               wordObj.sentenceTranslation !== originalWord.sentenceTranslation ||
@@ -322,16 +475,26 @@ const SetViewer = ({
               wordObj.image !== originalWord.image ||
               wordObj.pronunciation !== originalWord.pronunciation;
             
+            console.log(`📝 Word "${wordObj.word}" changed:`, hasChanged, {
+              imageChanged: wordObj.image !== originalWord.image,
+              englishTranslationChanged: wordObj.englishTranslation !== originalWord.englishTranslation,
+              currentImage: wordObj.image?.substring(0, 50),
+              originalImage: originalWord.image?.substring(0, 50)
+            });
+            
             if (hasChanged && onUpdateWord) {
               // Build updates object with only changed fields (use UI field names)
               const updates = {};
               if (wordObj.word !== originalWord.word) updates.word = wordObj.word;
+              if (wordObj.englishTranslation !== originalWord.englishTranslation) updates.englishTranslation = wordObj.englishTranslation || wordObj.word;
               if (wordObj.translation !== originalWord.translation) updates.translation = wordObj.translation || '';
               if (wordObj.sentence !== originalWord.sentence) updates.sentence = wordObj.sentence || null;
               if (wordObj.sentenceTranslation !== originalWord.sentenceTranslation) updates.sentenceTranslation = wordObj.sentenceTranslation || null;
               if (wordObj.example !== originalWord.example) updates.example = wordObj.example || null;
               if (wordObj.image !== originalWord.image) updates.image = wordObj.image || null;
               if (wordObj.pronunciation !== originalWord.pronunciation) updates.pronunciation = wordObj.pronunciation || null;
+              
+              console.log(`📝 Updating word "${wordObj.word}" with:`, updates);
               
               wordUpdatePromises.push(
                 onUpdateWord(wordObj.id, updates, set.id)
@@ -352,11 +515,18 @@ const SetViewer = ({
         console.log('Created words from DB:', createdWords);
         
         // Update the set with the created words (they now have IDs)
-        const updatedWords = filteredWords.map(word => {
+        const updatedWords = filteredWords.map((word, index) => {
           const wordObj = typeof word === 'string' ? { word } : word;
           if (!wordObj.id || wordObj.id.startsWith('temp-')) {
             // Find the corresponding created word
-            const createdWord = createdWords.find(cw => cw.word === wordObj.word);
+            // Use both word text and index to match to handle cases where multiple new words have the same text
+            const tempIndex = wordsToCreate.findIndex(w => 
+              (typeof w === 'string' ? w : w.word) === (typeof wordObj === 'string' ? wordObj : wordObj.word)
+            );
+            const createdWord = tempIndex >= 0 && tempIndex < createdWords.length ? 
+              createdWords[tempIndex] : 
+              createdWords.find(cw => cw.word === wordObj.word);
+            
             console.log('Replacing temp word', wordObj.word, 'with', createdWord);
             return createdWord || wordObj;
           }
@@ -365,19 +535,67 @@ const SetViewer = ({
         
         console.log('Final updated words:', updatedWords);
         
+        // If we were creating a new card, we need to stop editing it after saving
+        if (isCreatingNewCard) {
+          console.log('🔄 Resetting creation state after successful save');
+          setIsCreatingNewCard(false);
+          setEditingCard(null);
+          setEditingField(null);
+          setEditingValue('');
+        }
+        
         // Update set with words that now have IDs
         const updatedSet = { ...set, words: updatedWords };
         onUpdateSet(updatedSet);
-        setOriginalSet(JSON.parse(JSON.stringify(updatedSet)));
+        const clonedUpdatedSet = JSON.parse(JSON.stringify(updatedSet));
+        setOriginalSet(clonedUpdatedSet);
+        originalSetHash.current = JSON.stringify(clonedUpdatedSet);
+        justSavedRef.current = true; // Mark that we just saved
+        lastSaveTimestamp.current = Date.now(); // Record save timestamp
+        // Clear any existing timeout and set new one
+        if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+        saveTimeoutRef.current = setTimeout(() => {
+          justSavedRef.current = false;
+          // Force a re-check of unsaved changes state
+          setHasUnsavedChanges(false);
+          console.log('⏰ Cleared justSavedRef after timeout and reset unsaved changes');
+        }, 3000); // Keep flag active for 3 seconds to ensure browser events can check it
+        console.log('💾 Saved: Updated originalSet and hash');
       } else {
-        setOriginalSet(JSON.parse(JSON.stringify(set)));
+        const clonedSet = JSON.parse(JSON.stringify(set));
+        setOriginalSet(clonedSet);
+        originalSetHash.current = JSON.stringify(clonedSet);
+        justSavedRef.current = true; // Mark that we just saved
+        lastSaveTimestamp.current = Date.now(); // Record save timestamp
+        // Clear any existing timeout and set new one
+        if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+        saveTimeoutRef.current = setTimeout(() => {
+          justSavedRef.current = false;
+          // Force a re-check of unsaved changes state
+          setHasUnsavedChanges(false);
+          console.log('⏰ Cleared justSavedRef after timeout and reset unsaved changes');
+        }, 3000); // Keep flag active for 3 seconds to ensure browser events can check it
+        console.log('💾 Saved: Updated originalSet and hash (no DB changes)');
       }
       
       setHasUnsavedChanges(false);
       setIsCreatingNewCard(false);
     } else {
       // No word creation handler, just save locally
-      setOriginalSet(JSON.parse(JSON.stringify({ ...set, words: filteredWords })));
+      const clonedSet = JSON.parse(JSON.stringify({ ...set, words: filteredWords }));
+      setOriginalSet(clonedSet);
+      originalSetHash.current = JSON.stringify(clonedSet);
+      justSavedRef.current = true; // Mark that we just saved
+      lastSaveTimestamp.current = Date.now(); // Record save timestamp
+      // Clear any existing timeout and set new one
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = setTimeout(() => {
+        justSavedRef.current = false;
+        // Force a re-check of unsaved changes state
+        setHasUnsavedChanges(false);
+        console.log('⏰ Cleared justSavedRef after timeout and reset unsaved changes');
+      }, 3000); // Keep flag active for 3 seconds to ensure browser events can check it
+      console.log('💾 Saved: Updated originalSet and hash (local only)');
       setHasUnsavedChanges(false);
       setIsCreatingNewCard(false);
     }
@@ -402,7 +620,21 @@ const SetViewer = ({
     if (typeof updatedWords[index] === 'string') {
       updatedWords[index] = { word: updatedWords[index] };
     }
-    updatedWords[index] = { ...updatedWords[index], [field]: value };
+    
+    const updatedWord = { ...updatedWords[index], [field]: value };
+    
+    // ✅ Auto-set English translation when word field is updated
+    if (field === 'word') {
+      // If source language is English, use the word itself as English translation
+      if (set.source_language === 'English') {
+        updatedWord.englishTranslation = value;
+      } else if (!updatedWord.englishTranslation) {
+        // For non-English, keep empty until AI generates it
+        updatedWord.englishTranslation = '';
+      }
+    }
+    
+    updatedWords[index] = updatedWord;
     onUpdateSet({ ...set, words: updatedWords });
     
     // DON'T save to database automatically - only save when user clicks "Save Changes"
@@ -449,17 +681,51 @@ const SetViewer = ({
 
   const addNewWord = () => {
     console.log('=== ADD NEW WORD ===');
-    console.log('Current set:', JSON.parse(JSON.stringify(set))); // Deep clone for logging
-    console.log('Current set.words:', JSON.parse(JSON.stringify(set.words)));
+    console.log('Current set.id:', set?.id, 'set.name:', set?.name);
+    console.log('Current set.words count:', set?.words?.length);
     
+    // Clear any previous image search results when creating a new word
+    // This helps prevent issues with old search results being applied to new words
+    setImageSearchResults({});
+    setShowImageSelector(null);
+    
+    // Check if we already have an empty new word card that hasn't been saved
+    const existingEmptyCard = set.words.find(w => {
+      const wordObj = typeof w === 'string' ? { word: w } : w;
+      return (!wordObj.word || wordObj.word.trim() === '') && 
+             (!wordObj.id || wordObj.id.startsWith('temp-'));
+    });
+    
+    if (existingEmptyCard) {
+      console.log('⚠️ Found existing empty card - focusing it instead of creating a new one');
+      // Find index of the existing empty card
+      const emptyCardIndex = set.words.findIndex(w => w === existingEmptyCard);
+      
+      // Focus on the existing empty card instead of creating a new one
+      setEditingCard(emptyCardIndex);
+      setEditingField('word');
+      setEditingValue('');
+      setIsCreatingNewCard(true);
+      
+      // Scroll to that card
+      window.scrollTo({
+        top: 0,
+        behavior: 'smooth'
+      });
+      
+      return;
+    }
+    
+    // Create a new temporary word with a unique ID
     const tempId = `temp-${Date.now()}-${Math.random()}`;
     const newWord = {
       id: tempId, // Temporary ID to track this card until saved
       word: '',
+      englishTranslation: '', // ✅ Include English translation field
       translation: '',
       sentence: '',
       sentenceTranslation: '',
-      image: '',
+      image: null, // Use null instead of empty string for consistency
       pronunciation: '',
       tags: []
     };
@@ -474,7 +740,7 @@ const SetViewer = ({
     console.log('Second item should be existing card:', updatedWords[1]);
     
     const updatedSet = { ...set, words: updatedWords };
-    console.log('Calling onUpdateSet with:', JSON.parse(JSON.stringify(updatedSet)));
+    console.log('Calling onUpdateSet with set.id:', updatedSet?.id, 'words count:', updatedWords.length);
     
     onUpdateSet(updatedSet);
     
@@ -529,22 +795,39 @@ const SetViewer = ({
         const hasKorean = /[\uAC00-\uD7AF]/.test(wordObj.word);
         const hasCyrillic = /[\u0400-\u04FF]/.test(wordObj.word);
         
+        // Spanish word detection
+        const commonSpanishWords = /\b(hola|adiós|gracias|por favor|buenos días|buenas tardes|buenas noches|amigo|señor|señora|cómo estás|qué tal|cerveza|hasta luego|sí|no)\b/i;
+        const hasSpanishChars = /[áéíóúüñ¿¡]/i.test(wordObj.word);
+        const isLikelySpanish = commonSpanishWords.test(wordObj.word) || hasSpanishChars;
+        
         // Detect source language from the word itself
-        if (hasArabic) {
-          sourceLanguage = 'Arabic';
-          targetLanguage = 'English';
-        } else if (hasChinese) {
-          sourceLanguage = 'Chinese';
-          targetLanguage = 'English';
-        } else if (hasJapanese) {
-          sourceLanguage = 'Japanese';
-          targetLanguage = 'English';
-        } else if (hasKorean) {
-          sourceLanguage = 'Korean';
-          targetLanguage = 'English';
-        } else if (hasCyrillic) {
-          sourceLanguage = 'Russian';
-          targetLanguage = 'English';
+        const detectedSource = hasArabic ? 'Arabic' : 
+                              hasChinese ? 'Chinese' : 
+                              hasJapanese ? 'Japanese' : 
+                              hasKorean ? 'Korean' : 
+                              hasCyrillic ? 'Russian' : 
+                              isLikelySpanish ? 'Spanish' : null;
+        
+        if (detectedSource) {
+          sourceLanguage = detectedSource;
+          
+          // Try to get preferred target language from localStorage
+          const recent = localStorage.getItem('recentLanguages');
+          if (recent) {
+            const recentLanguages = JSON.parse(recent);
+            // Find a target language that's different from detected source
+            for (let lang of recentLanguages) {
+              if (lang !== detectedSource) {
+                targetLanguage = lang;
+                break;
+              }
+            }
+          }
+          
+          // Fallback to empty if no suitable target found
+          if (!targetLanguage || targetLanguage === detectedSource) {
+            targetLanguage = '';
+          }
         } else {
           // Check if there's Arabic in other word fields (translation/definition)
           const hasArabicInTranslation = /[\u0600-\u06FF]/.test(
@@ -552,9 +835,27 @@ const SetViewer = ({
           );
           
           if (hasArabicInTranslation) {
-            // English word, Arabic translation
-            sourceLanguage = 'English';
-            targetLanguage = 'Arabic';
+            // Try to get preferred languages from localStorage first
+            const recent = localStorage.getItem('recentLanguages');
+            if (recent) {
+              const recentLanguages = JSON.parse(recent);
+              if (recentLanguages.length > 0) {
+                // Try to find a non-Arabic source language
+                for (let lang of recentLanguages) {
+                  if (lang !== 'Arabic') {
+                    sourceLanguage = lang;
+                    break;
+                  }
+                }
+                targetLanguage = 'Arabic';
+              } else {
+                sourceLanguage = '';
+                targetLanguage = 'Arabic';
+              }
+            } else {
+              sourceLanguage = '';
+              targetLanguage = 'Arabic';
+            }
           } else {
             // For new empty cards, check other cards in the set to detect the pattern
             let detectedFromOtherCards = false;
@@ -593,10 +894,33 @@ const SetViewer = ({
               }
             }
             
-            // If we couldn't detect from other cards, use default
+            // If we couldn't detect from other cards, use last used languages
             if (!detectedFromOtherCards) {
-              sourceLanguage = 'English';
-              targetLanguage = 'Arabic'; // Default to English->Arabic instead of English->English
+              // Try to get last used languages from localStorage
+              const recent = localStorage.getItem('recentLanguages');
+              if (recent) {
+                const recentLanguages = JSON.parse(recent);
+                if (recentLanguages.length > 0) {
+                  sourceLanguage = recentLanguages[0];
+                  // Find a target language different from source
+                  for (let lang of recentLanguages) {
+                    if (lang !== sourceLanguage) {
+                      targetLanguage = lang;
+                      break;
+                    }
+                  }
+                  // If no different language found, use empty string
+                  if (targetLanguage === sourceLanguage) {
+                    targetLanguage = '';
+                  }
+                } else {
+                  sourceLanguage = '';
+                  targetLanguage = '';
+                }
+              } else {
+                sourceLanguage = '';
+                targetLanguage = '';
+              }
             }
           }
         }
@@ -612,11 +936,50 @@ const SetViewer = ({
       // Process single word - pass just the word text as a string in an array
       const wordsToProcess = [wordObj.word];
       
-      console.log('Processing words:', wordsToProcess);
+      // Add a timestamp to ensure we get a different result each time
+      // This will force the API to generate new content instead of returning cached results
+      const timestamp = new Date().getTime();
       
-      const aiResult = await processWordsWithAI(wordsToProcess, sourceLanguage, targetLanguage);
+      // Check if this is a regeneration request (already has content)
+      const isRegenerating = field === 'sentence' && wordObj.sentence && wordObj.sentence.trim() !== '';
+      
+      // Include the current sentence to explicitly avoid regenerating it
+      let currentSentence = '';
+      if (isRegenerating && wordObj.sentence) {
+        currentSentence = wordObj.sentence;
+      }
+      
+      console.log(`Processing words: ${wordsToProcess} (Request ID: ${timestamp}, Regenerating: ${isRegenerating})`);
+      if (isRegenerating) {
+        console.log(`Current sentence to avoid duplicating: "${currentSentence}"`);
+      }
+      
+      // Pass timestamp and regeneration info to the AI service to ensure unique results
+      const aiResult = await processWordsWithAI(
+        wordsToProcess, 
+        sourceLanguage, 
+        targetLanguage, 
+        timestamp, 
+        isRegenerating 
+          ? { 
+              field, 
+              currentContent: currentSentence,
+              simplicity: true, // Always prioritize simplicity
+              message: "Keep sentences simple and easy to understand"
+            } 
+          : { 
+              simplicity: true, // Always prioritize simplicity
+              message: "Keep sentences simple and easy to understand"
+            }
+      );
       
       console.log('AI Response:', aiResult);
+      
+      // Update set language if it was auto-detected
+      if (aiResult.detectedLanguage && aiResult.detectedLanguage !== 'Auto-detect' && set.source_language === 'Auto-detect') {
+        console.log(`✅ Language detected: ${aiResult.detectedLanguage} - Updating set...`);
+        onUpdateSet({ ...set, source_language: aiResult.detectedLanguage });
+      }
       
       // Extract the words from the AI response
       if (aiResult && aiResult.success && aiResult.words) {
@@ -637,13 +1000,34 @@ const SetViewer = ({
           if (field === 'translation') {
             updatedWords[cardIndex] = {
               ...currentWord,
-              translation: enrichedWord.translation
+              translation: enrichedWord.translation,
+              englishTranslation: enrichedWord.englishTranslation || currentWord.word // ✅ Add English translation
             };
           } else if (field === 'sentence') {
+            // When regenerating a sentence, clear previous data first to ensure we get new content
+            console.log('Generating new sentence, clearing previous sentence data');
+            
+            // Log the old and new sentences to verify they're different
+            console.log('Old sentence:', currentWord.sentence);
+            console.log('New sentence:', enrichedWord.sentence);
+            
+            // Validate that we got a new sentence that's different
+            if (currentWord.sentence === enrichedWord.sentence && currentWord.sentence) {
+              console.warn('AI generated the same sentence again! Retrying...');
+              
+              // Show notification that we're trying again
+              showNotificationMessage('Generated sentence was identical - regenerating...', 'info');
+              
+              // Try again immediately with higher randomness
+              setTimeout(() => toggleAiGeneration(cardIndex, field), 500);
+              return;
+            }
+            
             updatedWords[cardIndex] = {
               ...currentWord,
-              sentence: enrichedWord.sentence,
-              sentenceTranslation: enrichedWord.sentenceTranslation
+              sentence: enrichedWord.sentence, // Replace with the new sentence
+              sentenceTranslation: enrichedWord.sentenceTranslation,
+              englishTranslation: enrichedWord.englishTranslation || currentWord.word // ✅ Add English translation
             };
           }
           
@@ -708,6 +1092,8 @@ const SetViewer = ({
   };
 
   const playAudio = (text, language) => {
+    console.log('🔊 playAudio called with:', { text, language, setSourceLanguage: set.source_language });
+    
     if ('speechSynthesis' in window) {
       // Cancel any ongoing speech
       window.speechSynthesis.cancel();
@@ -757,6 +1143,8 @@ const SetViewer = ({
       // Use the provided language or detect from set
       const targetLang = language || set.source_language || 'English';
       const langCode = languageCodes[targetLang] || 'en-US';
+      console.log('🌍 Language mapping:', { targetLang, langCode });
+      
       utterance.lang = langCode;
       utterance.rate = 0.85; // Slightly slower for learning
       utterance.pitch = 1;
@@ -765,6 +1153,7 @@ const SetViewer = ({
       // Wait for voices to be loaded (important for some browsers, especially for Arabic)
       const speakWithVoice = () => {
         const voices = window.speechSynthesis.getVoices();
+        console.log('🎤 Available voices:', voices.length);
         
         // For Arabic, try multiple approaches
         if (targetLang === 'Arabic') {
@@ -775,7 +1164,10 @@ const SetViewer = ({
                       voices.find(v => v.name.toLowerCase().includes('arabic'));
           
           if (voice) {
+            console.log('✅ Using Arabic voice:', voice.name, voice.lang);
             utterance.voice = voice;
+          } else {
+            console.log('⚠️ No Arabic voice found');
           }
         } else {
           // For other languages, find matching voice
@@ -784,7 +1176,10 @@ const SetViewer = ({
                        voices.find(v => v.lang.startsWith(langPrefix));
           
           if (voice) {
+            console.log('✅ Using voice:', voice.name, voice.lang);
             utterance.voice = voice;
+          } else {
+            console.log('⚠️ No voice found for', targetLang, '- using default');
           }
         }
         
@@ -813,6 +1208,95 @@ const SetViewer = ({
         }, 500);
       }
     }
+  };
+
+  // Image handling functions
+  const handleImageSelect = (cardIndex, imageUrl) => {
+    console.log(`🖼️ handleImageSelect: card ${cardIndex}, url:`, imageUrl);
+    const updatedWords = [...set.words];
+    const wordObj = typeof updatedWords[cardIndex] === 'string'
+      ? { word: updatedWords[cardIndex] }
+      : updatedWords[cardIndex];
+    
+    console.log('🖼️ Original word:', wordObj);
+    console.log('🖼️ englishTranslation available:', !!wordObj.englishTranslation);
+    
+    // Clear any previously selected image for this card
+    // Make sure we're not keeping any old state
+    if (wordObj.id && wordObj.id.startsWith('temp-')) {
+      console.log('🖼️ This is a temporary card - ensuring clean image state');
+    }
+    
+    updatedWords[cardIndex] = {
+      ...wordObj,
+      image: imageUrl
+    };
+    
+    console.log('🖼️ Updated word:', updatedWords[cardIndex]);
+    console.log('🖼️ Calling onUpdateSet...');
+    
+    // Mark that we've made a change to ensure proper save handling
+    setHasUnsavedChanges(true);
+    
+    // Update the set with the new image
+    onUpdateSet({ ...set, words: updatedWords });
+  };
+
+  const handleImageSearchResults = (cardIndex, results, selectedIndex) => {
+    console.log(`📸 Storing search results for card ${cardIndex}:`, results.length, 'images');
+    setImageSearchResults(prev => ({
+      ...prev,
+      [cardIndex]: { results, selectedIndex }
+    }));
+  };
+
+  const handleImageRemove = (cardIndex) => {
+    console.log(`🖼️ handleImageRemove: card ${cardIndex}`);
+    const updatedWords = [...set.words];
+    const wordObj = typeof updatedWords[cardIndex] === 'string'
+      ? { word: updatedWords[cardIndex] }
+      : updatedWords[cardIndex];
+    
+    updatedWords[cardIndex] = {
+      ...wordObj,
+      image: null
+    };
+    
+    // Clear search results for this card to prevent any stale data
+    setImageSearchResults(prev => {
+      const newResults = {...prev};
+      delete newResults[cardIndex];
+      return newResults;
+    });
+    
+    // Mark that we've made a change
+    setHasUnsavedChanges(true);
+    
+    // Update the set with the image removed
+    onUpdateSet({ ...set, words: updatedWords });
+  };
+
+  const toggleImageSelector = (cardIndex) => {
+    const newValue = showImageSelector === cardIndex ? null : cardIndex;
+    
+    if (newValue !== null) {
+      // Log info about the word when opening image selector
+      const wordObj = typeof set.words[cardIndex] === 'string' 
+        ? { word: set.words[cardIndex] } 
+        : set.words[cardIndex];
+      
+      console.log(`🔍 Opening image selector for word at index ${cardIndex}:`, {
+        word: wordObj.word,
+        definition: wordObj.definition,  // Log the definition field
+        englishTranslation: wordObj.englishTranslation,
+        english_translation: wordObj.english_translation,
+        source_language: set.source_language,
+        hasTranslationData: !!(wordObj.definition || wordObj.englishTranslation || wordObj.english_translation),
+        fullWordObject: wordObj
+      });
+    }
+    
+    setShowImageSelector(newValue);
   };
 
   // Memoize filtered words to avoid re-computing on every render
@@ -914,7 +1398,7 @@ const SetViewer = ({
                 {/* Listen Button for Word */}
                 {wordObj.word && (
                   <button
-                    onClick={() => playAudio(wordObj.word)}
+                    onClick={() => playAudio(wordObj.word, set.source_language)}
                     className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
                     title="Listen to pronunciation"
                   >
@@ -999,31 +1483,48 @@ const SetViewer = ({
           </div>
 
           {/* Image */}
-          {isEditing && editingCard === originalIndex && editingField === 'image' ? (
+          {showImageSelector === originalIndex ? (
             <div className="space-y-2">
-              <label className="text-xs font-medium text-gray-600">Image URL:</label>
-              <input
-                type="text"
-                value={editingValue}
-                onChange={(e) => setEditingValue(e.target.value)}
-                className="w-full px-3 py-2 text-sm border-2 border-blue-500 rounded-lg focus:outline-none focus:border-blue-600"
-                onBlur={saveEdit}
-                onKeyPress={(e) => e.key === 'Enter' && saveEdit()}
-                autoFocus
-                placeholder="Enter image URL (e.g., https://example.com/image.jpg)"
+              <ImageSelector
+                key={`image-selector-${originalIndex}-${wordObj.id || originalIndex}`}
+                word={wordObj.word}
+                // Look for translation in definition field as that's where it's stored
+                englishTranslation={wordObj.definition || wordObj.englishTranslation || wordObj.english_translation}
+                currentImageUrl={wordObj.image}
+                searchResults={imageSearchResults[originalIndex]?.results || []}
+                selectedIndex={imageSearchResults[originalIndex]?.selectedIndex || 0}
+                onImageSelect={(url) => handleImageSelect(originalIndex, url)}
+                onImageRemove={() => handleImageRemove(originalIndex)}
+                onSearchResults={(results, selectedIndex) => handleImageSearchResults(originalIndex, results, selectedIndex)}
+                onEnglishTranslationUpdate={(translation) => {
+                  // This callback shouldn't be needed now since we already have translations,
+                  // but keeping it for completeness
+                  console.log(`💾 Updating English translation for word at index ${originalIndex}: "${translation}"`);
+                  
+                  // Update word object with the English translation
+                  const updatedWords = [...set.words];
+                  const wordObj = typeof updatedWords[originalIndex] === 'string' 
+                    ? { word: updatedWords[originalIndex] } 
+                    : { ...updatedWords[originalIndex] };
+                  
+                  // Store translation in definition field as that's the convention used
+                  updatedWords[originalIndex] = {
+                    ...wordObj,
+                    definition: translation
+                  };
+                  
+                  // Update the set with the new word data
+                  onUpdateSet({ ...set, words: updatedWords });
+                }}
+                compact={true}
+                sourceLanguage={set.source_language}
               />
-              {editingValue && (
-                <div className="w-full h-32 rounded-lg overflow-hidden">
-                  <img 
-                    src={editingValue} 
-                    alt="Preview"
-                    className="w-full h-full object-cover"
-                    onError={(e) => {
-                      e.target.src = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="100" height="100"%3E%3Ctext x="50%25" y="50%25" font-size="14" text-anchor="middle" fill="%23999"%3EInvalid URL%3C/text%3E%3C/svg%3E';
-                    }}
-                  />
-                </div>
-              )}
+              <button
+                onClick={() => toggleImageSelector(originalIndex)}
+                className="w-full px-3 py-1.5 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
+              >
+                Close
+              </button>
             </div>
           ) : wordObj.image ? (
             <div className="w-full h-32 sm:h-40 rounded-lg overflow-hidden relative group">
@@ -1034,7 +1535,7 @@ const SetViewer = ({
               />
               <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-all duration-200 flex items-center justify-center">
                 <button
-                  onClick={() => startEdit(originalIndex, 'image', wordObj.image)}
+                  onClick={() => toggleImageSelector(originalIndex)}
                   className="opacity-0 group-hover:opacity-100 bg-white/90 text-gray-700 px-3 py-1 rounded-lg text-sm font-medium transition-all duration-200 hover:bg-white"
                 >
                   Change Image
@@ -1044,7 +1545,7 @@ const SetViewer = ({
           ) : (
             <div 
               className="w-full h-32 sm:h-40 rounded-lg border-2 border-dashed border-gray-300 hover:border-blue-400 cursor-pointer transition-all duration-200 flex items-center justify-center group"
-              onClick={() => startEdit(originalIndex, 'image', '')}
+              onClick={() => toggleImageSelector(originalIndex)}
             >
               <div className="text-center">
                 <div className="flex items-center justify-center space-x-2">
@@ -1068,7 +1569,7 @@ const SetViewer = ({
                   )}
                 </div>
                 <p className="text-sm text-gray-500 group-hover:text-blue-600 transition-colors mt-2">
-                  Click to add image URL
+                  Click to add image
                 </p>
               </div>
             </div>
@@ -1144,7 +1645,7 @@ const SetViewer = ({
               {/* Listen Button for Sentence */}
               {wordObj.sentence && (
                 <button
-                  onClick={() => playAudio(wordObj.sentence)}
+                  onClick={() => playAudio(wordObj.sentence, set.source_language)}
                   className="p-1 text-gray-500 hover:bg-gray-50 rounded transition-colors ml-2"
                   title="Listen to sentence"
                 >
@@ -1290,7 +1791,7 @@ const SetViewer = ({
                       
                       {wordObj.word && (
                         <button
-                          onClick={() => playAudio(wordObj.word)}
+                          onClick={() => playAudio(wordObj.word, set.source_language)}
                           className="p-1 text-blue-600 hover:bg-blue-50 rounded transition-colors"
                           title="Listen"
                         >
@@ -1389,7 +1890,7 @@ const SetViewer = ({
                             "{wordObj.sentence}"
                           </span>
                           <button
-                            onClick={() => playAudio(wordObj.sentence)}
+                            onClick={() => playAudio(wordObj.sentence, set.source_language)}
                             className="p-1 text-gray-500 hover:bg-gray-50 rounded transition-colors"
                             title="Listen to sentence"
                           >

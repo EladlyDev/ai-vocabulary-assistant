@@ -1,16 +1,21 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import BackToTop from './BackToTop';
 import { processWordsInBatches } from '../services/aiService';
+import { searchImages } from '../services/imageSearch';
+import ImageSelector from './ImageSelector';
 
-const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateGroup }) => {
+const SetEditor = ({ set, defaultGroupId, onBack, onUpdateSet, onSaveSet, groups = [], onCreateGroup }) => {
+  // State for tracking saving status
+  const [isSaving, setIsSaving] = useState(false);
+  
   // Initialize from localStorage backup if available
   const [title, setTitle] = useState(() => {
     const backup = localStorage.getItem('editorBackup');
     if (backup) {
       const parsed = JSON.parse(backup);
-      return parsed.title || set?.name || 'New Set';
+      return parsed.title;
     }
-    return set?.name || 'New Set';
+    return '';
   });
   
   const [words, setWords] = useState(() => {
@@ -30,10 +35,31 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
     // Second priority: localStorage backup
     const backup = localStorage.getItem('editorBackup');
     if (backup) {
-      const parsed = JSON.parse(backup);
-      return parsed.sourceLanguage || 'Auto-detect';
+      try {
+        const parsed = JSON.parse(backup);
+        if (parsed.sourceLanguage) {
+          return parsed.sourceLanguage;
+        }
+      } catch (e) {
+        console.error('Error parsing backup for sourceLanguage:', e);
+      }
     }
-    return 'Auto-detect';
+    // Third priority: last used source language from recent languages
+    try {
+      const recentInStorage = localStorage.getItem('recentLanguages');
+      if (recentInStorage) {
+        const recentLanguages = JSON.parse(recentInStorage);
+        if (Array.isArray(recentLanguages) && recentLanguages.length > 0) {
+          console.log('Using most recent language for source:', recentLanguages[0]);
+          return recentLanguages[0];
+        }
+      }
+    } catch (e) {
+      console.error('Error parsing recentLanguages for source:', e);
+    }
+    
+    // Default to empty
+    return '';
   });
   
   const [targetLanguage, setTargetLanguage] = useState(() => {
@@ -41,13 +67,71 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
     if (set?.target_language) {
       return set.target_language;
     }
+    
     // Second priority: localStorage backup
     const backup = localStorage.getItem('editorBackup');
     if (backup) {
-      const parsed = JSON.parse(backup);
-      return parsed.targetLanguage || 'English';
+      try {
+        const parsed = JSON.parse(backup);
+        if (parsed.targetLanguage) {
+          return parsed.targetLanguage;
+        }
+      } catch (e) {
+        console.error('Error parsing backup for targetLanguage:', e);
+      }
     }
-    return 'English';
+    
+    // Get what the source language will be to ensure target is different
+    let initialSourceLang = '';
+    if (set?.source_language) {
+      initialSourceLang = set.source_language;
+    } else {
+      // Check backup
+      try {
+        const backupForSource = localStorage.getItem('editorBackup');
+        if (backupForSource) {
+          const parsed = JSON.parse(backupForSource);
+          if (parsed.sourceLanguage) {
+            initialSourceLang = parsed.sourceLanguage;
+          }
+        }
+      } catch (e) {}
+      
+      // If still empty, check recent languages
+      if (!initialSourceLang) {
+        try {
+          const recentInStorage = localStorage.getItem('recentLanguages');
+          if (recentInStorage) {
+            const recentLanguages = JSON.parse(recentInStorage);
+            if (Array.isArray(recentLanguages) && recentLanguages.length > 0) {
+              initialSourceLang = recentLanguages[0];
+            }
+          }
+        } catch (e) {}
+      }
+    }
+    
+    // Third priority: last used language (different from source)
+    try {
+      const recentInStorage = localStorage.getItem('recentLanguages');
+      if (recentInStorage) {
+        const recentLanguages = JSON.parse(recentInStorage);
+        if (Array.isArray(recentLanguages) && recentLanguages.length > 0) {
+          // Try to find a language different from source
+          for (let lang of recentLanguages) {
+            if (lang !== initialSourceLang) {
+              console.log('Using recent language for target:', lang, '(different from source:', initialSourceLang, ')');
+              return lang;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Error parsing recentLanguages for target:', e);
+    }
+    
+    // Default to empty
+    return '';
   });
   
   const [sourceDropdownOpen, setSourceDropdownOpen] = useState(false);
@@ -58,12 +142,46 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
   const [targetSearchQuery, setTargetSearchQuery] = useState('');
   
   const [selectedGroupId, setSelectedGroupId] = useState(() => {
+    console.log('SetEditor initializing with set.id:', set?.id, 'set.name:', set?.name);
+    console.log('Available groups count:', groups?.length);
+    console.log('Default group ID from prop:', defaultGroupId);
+    
+    // Helper function to validate groupId is primitive (not an object/event)
+    const isValidGroupId = (id) => {
+      return id !== null && id !== undefined && typeof id !== 'object' && typeof id !== 'function';
+    };
+    
+    // First priority: defaultGroupId prop if provided (and valid)
+    if (defaultGroupId && isValidGroupId(defaultGroupId)) {
+      console.log('Using defaultGroupId prop:', defaultGroupId);
+      return defaultGroupId;
+    }
+    
+    // Second priority: use the pre-selected group ID from the set prop (if editing existing set)
+    if (set?.group_id && isValidGroupId(set.group_id)) {
+      console.log('Using group_id from set:', set.group_id);
+      return set.group_id;
+    }
+    
+    // Third priority: use from localStorage backup
     const backup = localStorage.getItem('editorBackup');
     if (backup) {
-      const parsed = JSON.parse(backup);
-      return parsed.selectedGroupId || (groups.length > 0 ? groups[0].id : null);
+      try {
+        const parsed = JSON.parse(backup);
+        const backupGroupId = parsed.selectedGroupId;
+        if (backupGroupId && isValidGroupId(backupGroupId)) {
+          console.log('Using group_id from backup:', backupGroupId);
+          return backupGroupId;
+        }
+      } catch (e) {
+        console.warn('Failed to parse backup:', e);
+      }
     }
-    return groups.length > 0 ? groups[0].id : null;
+    
+    // Fourth priority: default to first group
+    const firstGroupId = groups.length > 0 ? groups[0].id : null;
+    console.log('Using first group_id:', firstGroupId);
+    return firstGroupId;
   });
   
   const [groupDropdownOpen, setGroupDropdownOpen] = useState(false);
@@ -79,7 +197,20 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationError, setGenerationError] = useState(null);
   const [generationProgress, setGenerationProgress] = useState({ current: 0, total: 0 });
-  const [processedWords, setProcessedWords] = useState([]); // Array of enriched word objects
+  const [processedWords, setProcessedWords] = useState(() => {
+    // Try to load processed words from backup
+    const backup = localStorage.getItem('editorBackup');
+    if (backup) {
+      const parsed = JSON.parse(backup);
+      if (parsed.processedWords && Array.isArray(parsed.processedWords) && parsed.processedWords.length > 0) {
+        return parsed.processedWords;
+      }
+    }
+    return []; // Default to empty array
+  }); // Array of enriched word objects
+  
+  // Validation state
+  const [validationError, setValidationError] = useState(null);
   
   const sourceDropdownRef = useRef(null);
   const targetDropdownRef = useRef(null);
@@ -97,30 +228,54 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
       const now = Date.now();
       const fiveMinutes = 5 * 60 * 1000;
       
-      // Check if backup is actually different from current props
-      const isDifferent = parsed.title !== (set?.name || 'New Set') ||
-                          parsed.words !== (set?.words ? set.words.join('\n') : '');
+      // Check if backup is actually different from current props AND not empty
+      const backupHasContent = (parsed.title && parsed.title.trim() !== '') || 
+                              (parsed.words && parsed.words.trim() !== '');
       
-      // Only show notification if backup is recent (within 5 minutes) AND different
-      if (timestamp && (now - timestamp) < fiveMinutes && isDifferent) {
+      const isDifferent = (parsed.title !== (set?.name || '') && parsed.title) ||
+                          (parsed.words !== (set?.words ? set.words.join('\n') : '') && parsed.words);
+      
+      // Only show notification if backup is recent (within 5 minutes), different, and has content
+      if (timestamp && (now - timestamp) < fiveMinutes && isDifferent && backupHasContent) {
         setShowBackupRestored(true);
         setTimeout(() => setShowBackupRestored(false), 5000);
       }
     }
   }, []); // Empty dependency - only run once on mount
   
+  // Ensure source and target languages are never the same
+  useEffect(() => {
+    // If both languages are the same and not empty, reset target language
+    if (sourceLanguage && targetLanguage && sourceLanguage === targetLanguage) {
+      console.log('Source and target languages cannot be the same, resetting target language');
+      setTargetLanguage('');
+    }
+  }, [sourceLanguage, targetLanguage]);
+
   // Auto-save to localStorage
   useEffect(() => {
+    // Only save primitive values to avoid circular reference errors
     const backup = {
       title,
       words,
       sourceLanguage,
       targetLanguage,
-      selectedGroupId,
-      timestamp: Date.now()
+      selectedGroupId: typeof selectedGroupId === 'object' ? null : selectedGroupId, // Ensure we only save ID, not object
+      timestamp: Date.now(),
+      processedWords: processedWords.length > 0 ? processedWords : null // Save processed words with cards
     };
     localStorage.setItem('editorBackup', JSON.stringify(backup));
-  }, [title, words, sourceLanguage, targetLanguage, selectedGroupId]);
+  }, [title, words, sourceLanguage, targetLanguage, selectedGroupId, processedWords]);
+
+  // Auto-dismiss validation error after 5 seconds
+  useEffect(() => {
+    if (validationError) {
+      const timer = setTimeout(() => {
+        setValidationError(null);
+      }, 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [validationError]);
 
   const allLanguages = [
     'English',
@@ -161,37 +316,75 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
     'Swahili'
   ];
 
-  // Get recent languages from localStorage
-  const getRecentLanguages = () => {
-    const recent = localStorage.getItem('recentLanguages');
-    return recent ? JSON.parse(recent) : ['English', 'Spanish', 'Arabic'];
-  };
+  // This function was removed as we now use the recentLanguages state
 
   // Save language to recent list
   const saveToRecent = (language) => {
-    if (language === 'Auto-detect') return;
+    // Don't save empty language
+    if (!language || language.trim() === '') return;
     
-    let recent = getRecentLanguages();
+    // Use our current state instead of reading localStorage again
+    let recent = [...recentLanguages];
+    
     // Remove if already exists
     recent = recent.filter(lang => lang !== language);
     // Add to beginning
     recent.unshift(language);
     // Keep only top 5
     recent = recent.slice(0, 5);
+    
+    // Update both localStorage and component state
     localStorage.setItem('recentLanguages', JSON.stringify(recent));
+    setRecentLanguages(recent);
+    
+    console.log('Language saved to recent list:', language);
   };
+
+  // State for recent languages
+  const [recentLanguages, setRecentLanguages] = useState([]);
+  
+  // Load recent languages on component mount
+  useEffect(() => {
+    const loadRecentLanguages = () => {
+      const recentInStorage = localStorage.getItem('recentLanguages');
+      if (recentInStorage && recentInStorage !== '[]') {
+        try {
+          const parsed = JSON.parse(recentInStorage);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const filtered = parsed.filter(lang => typeof lang === 'string' && lang.trim() !== '');
+            setRecentLanguages(filtered);
+            console.log('Loaded recent languages from localStorage:', filtered);
+          }
+        } catch (e) {
+          console.error('Error parsing recent languages:', e);
+        }
+      }
+    };
+    
+    // Load on mount
+    loadRecentLanguages();
+    
+    // Also set up a storage event listener to detect changes in other tabs
+    const handleStorageChange = (e) => {
+      if (e.key === 'recentLanguages') {
+        loadRecentLanguages();
+      }
+    };
+    
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, []);
 
   // Filter languages based on search
   const getFilteredLanguages = (searchQuery, includeRecent = true) => {
-    const recent = getRecentLanguages();
     const filtered = allLanguages.filter(lang =>
       lang.toLowerCase().includes(searchQuery.toLowerCase())
     );
     
     if (includeRecent && !searchQuery) {
       // Show recent at top when no search query
-      const nonRecent = filtered.filter(lang => !recent.includes(lang));
-      return { recent, other: nonRecent };
+      const nonRecent = filtered.filter(lang => !recentLanguages.includes(lang));
+      return { recent: recentLanguages, other: nonRecent };
     }
     
     return { recent: [], other: filtered };
@@ -287,7 +480,14 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
   const handleWordsChange = useCallback((e) => {
     const newWords = e.target.value;
     setWords(newWords);
-  }, []);
+    
+    // Reset processed words when the user changes the input text
+    // This prevents new words from inheriting images from previously processed words
+    if (processedWords.length > 0) {
+      console.log('🗑️ Resetting processed words due to text input change');
+      setProcessedWords([]);
+    }
+  }, [processedWords.length]);
 
   const handleBack = useCallback(() => {
     if (hasUnsavedChanges) {
@@ -298,22 +498,77 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
     }
   }, [hasUnsavedChanges, onBack]);
 
-  const handleSaveChanges = () => {
-    // Use processed words if available, otherwise fall back to simple words array
-    const dataToSave = processedWords.length > 0 ? processedWords : wordsArray;
+  const handleSaveChanges = async () => {
+    // Prevent multiple clicks while saving
+    if (isSaving) return;
     
-    if (title.trim() && dataToSave.length > 0) {
+    // Clear any previous validation errors
+    setValidationError(null);
+    
+    // Validate title
+    if (!title.trim()) {
+      setValidationError('Please enter a title for your set');
+      return;
+    }
+    
+    // Validate words
+    const dataToSave = processedWords.length > 0 ? processedWords : wordsArray;
+    if (dataToSave.length === 0) {
+      setValidationError('Please add at least one word to your set');
+      return;
+    }
+    
+    // Delay setting isSaving to true to allow any pending state updates to complete
+    setTimeout(() => {
+      setIsSaving(true);
+    }, 0);
+    
+    try {
+      // Save complete word data for processed words, or convert to string format for unprocessed
+      const wordsToSave = (processedWords.length > 0 ? processedWords : wordsArray).map(wordData => {
+        if (typeof wordData === 'string') {
+          // Plain text word, no processing done yet
+          // For new words without processing, create a minimal object with the word
+          // and set English translation to the same as the word if source language is English
+          return {
+            word: wordData,
+            englishTranslation: sourceLanguage === 'English' ? wordData : '',
+            image: null // Ensure image is explicitly null for new words
+          };
+        }
+        // Processed word object - save complete object with image and English translation
+        return {
+          word: wordData.word,
+          englishTranslation: wordData.englishTranslation || (sourceLanguage === 'English' ? wordData.word : ''),
+          translation: wordData.translation,
+          sentence: wordData.sentence,
+          sentenceTranslation: wordData.sentenceTranslation,
+          image: wordData.image || null,
+          // Preserve any existing fields that might be needed
+          ...(wordData.id ? { id: wordData.id } : {}),
+          ...(wordData.tags ? { tags: wordData.tags } : {}),
+          ...(wordData.pronunciation ? { pronunciation: wordData.pronunciation } : {})
+        };
+      });
+      
       const setData = {
         name: title,
-        words: dataToSave,
+        words: wordsToSave,
         source_language: sourceLanguage,
         target_language: targetLanguage
       };
       
+      console.log('💾 Saving set with words:', wordsToSave);
+      
       if (set?.id) {
-        onUpdateSet({ ...set, ...setData });
+        await onUpdateSet({ ...set, ...setData });
       } else {
-        onSaveSet(setData, selectedGroupId);
+        // Ensure we only pass a valid groupId (not an object or event)
+        const validGroupId = (selectedGroupId && typeof selectedGroupId !== 'object' && typeof selectedGroupId !== 'function') 
+          ? selectedGroupId 
+          : null;
+        console.log('📤 Calling onSaveSet with clean groupId:', validGroupId);
+        await onSaveSet(setData, validGroupId);
       }
       
       // DON'T clear backup here - let the upload process handle it
@@ -322,13 +577,41 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
       // Update original set to reflect saved state
       const savedSet = {
         name: title,
-        words: dataToSave
+        words: wordsToSave
       };
       const clonedSet = JSON.parse(JSON.stringify(savedSet));
       setOriginalSet(clonedSet);
       originalSetHash.current = JSON.stringify(clonedSet);
       setHasUnsavedChanges(false);
+    } finally {
+      setIsSaving(false);
     }
+  };
+
+  // Handle image selection for preview cards
+  const handlePreviewImageSelect = (index, imageUrl) => {
+    console.log(`🖼️ Preview: Selecting image for word ${index}`);
+    const updated = [...processedWords];
+    updated[index] = { ...updated[index], image: imageUrl };
+    setProcessedWords(updated);
+  };
+
+  const handlePreviewImageSearchResults = (index, results, selectedIndex) => {
+    console.log(`📸 Preview: Storing ${results.length} results for word ${index}`);
+    const updated = [...processedWords];
+    updated[index] = { 
+      ...updated[index], 
+      imageResults: results,
+      imageSelectedIndex: selectedIndex 
+    };
+    setProcessedWords(updated);
+  };
+
+  const handlePreviewImageRemove = (index) => {
+    console.log(`🗑️ Preview: Removing image for word ${index}`);
+    const updated = [...processedWords];
+    updated[index] = { ...updated[index], image: null, imageResults: [] };
+    setProcessedWords(updated);
   };
 
   const handleProcessWords = async () => {
@@ -369,19 +652,62 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
         20, // chunk size
         (current, total) => {
           setGenerationProgress({ current, total });
+        },
+        // Add simplicity info to ensure we get simple sentences
+        { 
+          simplicity: true, 
+          message: "Generate only simple, easy-to-understand sentences"
         }
       );
+
+      // Language detection logic removed - user must select language manually
 
       // Convert to array of enriched word objects for display
       const enrichedWords = Object.keys(result.words).map(word => ({
         word: word,
+        englishTranslation: result.words[word].englishTranslation || word,
         translation: result.words[word].translation,
         sentence: result.words[word].sentence,
         sentenceTranslation: result.words[word].sentenceTranslation
       }));
 
-      setProcessedWords(enrichedWords);
+      console.log('🎨 Starting image search for', enrichedWords.length, 'words...');
+      
+      // Search for images for each word
+      const wordsWithImages = await Promise.all(
+        enrichedWords.map(async (wordObj, index) => {
+          try {
+            setGenerationProgress({ 
+              current: wordList.length + index, 
+              total: wordList.length + enrichedWords.length,
+              message: `Searching images... (${index + 1}/${enrichedWords.length})`
+            });
+            
+            // Use English translation for image search (better results)
+            const searchTerm = sourceLanguage === 'English' ? wordObj.word : wordObj.englishTranslation;
+            console.log(`🖼️ Searching images for "${wordObj.word}" using search term: "${searchTerm}"`);
+            
+            // Search directly with English term (no translation API needed)
+            const images = await searchImages(searchTerm, 10, false, 'English');
+            console.log(`🖼️ Found ${images.length} images for "${wordObj.word}"`);
+            
+            // Add first image if available
+            return {
+              ...wordObj,
+              image: images.length > 0 ? images[0].url : null,
+              imageResults: images // Store all results for navigation
+            };
+          } catch (error) {
+            console.error(`Failed to search images for "${wordObj.word}":`, error);
+            return { ...wordObj, image: null, imageResults: [] };
+          }
+        })
+      );
+
+      setProcessedWords(wordsWithImages);
       setIsGenerating(false);
+      
+      console.log('✅ Processing complete with images!');
       
       // Show success message briefly
       setTimeout(() => {
@@ -502,11 +828,31 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
   };
 
   const handleConfirmUnsavedChanges = () => {
+    // Always clear backup when user confirms discarding changes
+    localStorage.removeItem('editorBackup');
+    
+    // Reset form state to initial values
+    if (set) {
+      setTitle(set.name || '');
+      setWords(set.words ? set.words.join('\n') : '');
+      setSourceLanguage(set.source_language || '');
+      setTargetLanguage(set.target_language || '');
+      setSelectedGroupId(set.group_id || (groups.length > 0 ? groups[0].id : null));
+    } else {
+      setTitle('');
+      setWords('');
+      setSourceLanguage('');
+      setTargetLanguage('');
+      setSelectedGroupId(groups.length > 0 ? groups[0].id : null);
+    }
+    
+    // Clear processed words
+    setProcessedWords([]);
+    
     if (pendingAction === 'back') {
-      // Clear backup when user confirms leaving without saving
-      localStorage.removeItem('editorBackup');
       onBack();
     }
+    
     setShowUnsavedChangesModal(false);
     setPendingAction(null);
   };
@@ -588,19 +934,26 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
             {/* Save Button */}
             <button
               onClick={handleSaveChanges}
-              disabled={!hasUnsavedChanges && !(!set?.id && title.trim() && words.trim())}
+              disabled={isSaving || (!hasUnsavedChanges && !(!set?.id && title.trim() && words.trim()))}
               className={`inline-flex items-center justify-center px-3 sm:px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 shadow-sm hover:shadow-md flex-shrink-0 ${
-                hasUnsavedChanges || (!set?.id && title.trim() && words.trim())
+                (hasUnsavedChanges || (!set?.id && title.trim() && words.trim())) && !isSaving
                   ? 'bg-blue-600 text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500' 
                   : 'bg-gray-300 text-gray-500 cursor-not-allowed'
               }`}
             >
-              <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
-              </svg>
+              {isSaving ? (
+                <svg className="w-4 h-4 mr-2 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+              ) : (
+                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+                </svg>
+              )}
               <span className="hidden sm:inline">{set?.id ? 'Save Changes' : 'Create Set'}</span>
               <span className="sm:hidden">{set?.id ? 'Save' : 'Create'}</span>
-              {hasUnsavedChanges && (
+              {hasUnsavedChanges && !isSaving && (
                 <div className="w-2 h-2 bg-red-400 rounded-full ml-2 animate-pulse"></div>
               )}
             </button>
@@ -763,7 +1116,11 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
                     }}
                     className="w-full bg-white border-2 border-gray-200 rounded-xl px-4 py-3 text-left focus:border-blue-500 focus:ring-0 transition-all duration-200 hover:border-gray-300 text-gray-700 font-medium flex items-center justify-between"
                   >
-                    <span>{sourceLanguage}</span>
+                    {sourceLanguage ? (
+                      <span>{sourceLanguage}</span>
+                    ) : (
+                      <span className="text-gray-400">Select source language</span>
+                    )}
                     <svg className={`w-5 h-5 text-gray-400 transition-transform duration-200 ${sourceDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                     </svg>
@@ -798,21 +1155,6 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
                           
                           return (
                             <>
-                              {/* Auto-detect option */}
-                              {!sourceSearchQuery && (
-                                <>
-                                  <button
-                                    onClick={() => {
-                                      setSourceLanguage('Auto-detect');
-                                      setSourceDropdownOpen(false);
-                                    }}
-                                    className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors duration-150 text-gray-700 font-medium border-b border-gray-100"
-                                  >
-                                    <span className="text-blue-600">🔄</span> Auto-detect
-                                  </button>
-                                </>
-                              )}
-                              
                               {/* Recent Languages */}
                               {recent.length > 0 && (
                                 <>
@@ -823,8 +1165,13 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
                                     <button
                                       key={lang}
                                       onClick={() => {
+                                        // Update source language
                                         setSourceLanguage(lang);
                                         saveToRecent(lang);
+                                        // If target is same as new source, clear target
+                                        if (targetLanguage === lang) {
+                                          setTargetLanguage('');
+                                        }
                                         setSourceDropdownOpen(false);
                                       }}
                                       className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors duration-150 text-gray-700 font-medium"
@@ -847,8 +1194,13 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
                                     <button
                                       key={lang}
                                       onClick={() => {
+                                        // Update source language
                                         setSourceLanguage(lang);
                                         saveToRecent(lang);
+                                        // If target is same as new source, clear target
+                                        if (targetLanguage === lang) {
+                                          setTargetLanguage('');
+                                        }
                                         setSourceDropdownOpen(false);
                                       }}
                                       className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors duration-150 text-gray-700 font-medium"
@@ -878,7 +1230,11 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
                     }}
                     className="w-full bg-white border-2 border-gray-200 rounded-xl px-4 py-3 text-left focus:border-blue-500 focus:ring-0 transition-all duration-200 hover:border-gray-300 text-gray-700 font-medium flex items-center justify-between"
                   >
-                    <span>{targetLanguage}</span>
+                    {targetLanguage ? (
+                      <span>{targetLanguage}</span>
+                    ) : (
+                      <span className="text-gray-400">Select target language</span>
+                    )}
                     <svg className={`w-5 h-5 text-gray-400 transition-transform duration-200 ${targetDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                     </svg>
@@ -923,11 +1279,22 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
                                     <button
                                       key={lang}
                                       onClick={() => {
-                                        setTargetLanguage(lang);
-                                        saveToRecent(lang);
-                                        setTargetDropdownOpen(false);
+                                        // Only set if different from source language
+                                        if (lang !== sourceLanguage) {
+                                          setTargetLanguage(lang);
+                                          saveToRecent(lang);
+                                          setTargetDropdownOpen(false);
+                                        } else {
+                                          // Alert user they can't select the same language
+                                          alert('Target language must be different from source language');
+                                        }
                                       }}
-                                      className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors duration-150 text-gray-700 font-medium"
+                                      className={`w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors duration-150 ${
+                                        lang === sourceLanguage 
+                                          ? 'text-gray-400 cursor-not-allowed' 
+                                          : 'text-gray-700 font-medium'
+                                      }`}
+                                      disabled={lang === sourceLanguage}
                                     >
                                       <span className="text-blue-600">⭐</span> {lang}
                                     </button>
@@ -947,11 +1314,22 @@ const SetEditor = ({ set, onBack, onUpdateSet, onSaveSet, groups = [], onCreateG
                                     <button
                                       key={lang}
                                       onClick={() => {
-                                        setTargetLanguage(lang);
-                                        saveToRecent(lang);
-                                        setTargetDropdownOpen(false);
+                                        // Only set if different from source language
+                                        if (lang !== sourceLanguage) {
+                                          setTargetLanguage(lang);
+                                          saveToRecent(lang);
+                                          setTargetDropdownOpen(false);
+                                        } else {
+                                          // Alert user they can't select the same language
+                                          alert('Target language must be different from source language');
+                                        }
                                       }}
-                                      className="w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors duration-150 text-gray-700 font-medium"
+                                      className={`w-full text-left px-4 py-2 hover:bg-blue-50 transition-colors duration-150 ${
+                                        lang === sourceLanguage 
+                                          ? 'text-gray-400 cursor-not-allowed' 
+                                          : 'text-gray-700 font-medium'
+                                      }`}
+                                      disabled={lang === sourceLanguage}
                                     >
                                       {lang}
                                     </button>
@@ -1090,26 +1468,46 @@ leer"
                 {processedWords.map((wordData, index) => (
                   <div key={index} className="bg-gradient-to-br from-white to-gray-50 border-2 border-gray-200 rounded-xl p-6 shadow-md hover:shadow-lg transition-all duration-200">
                     
-                    {/* Image Placeholder (for Phase 3D - Google Custom Search) */}
+                    {/* Image Selector (Phase 3D - Google Custom Search) */}
                     <div className="mb-6">
-                      <div className="relative group">
-                        <div className="w-full h-40 bg-gradient-to-br from-gray-200 to-gray-300 rounded-xl flex items-center justify-center">
-                          <div className="text-center text-gray-500">
-                            <svg className="w-12 h-12 mx-auto mb-2 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                            </svg>
-                            <p className="text-xs font-medium">Image (Phase 3D)</p>
-                          </div>
-                        </div>
-                      </div>
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <button disabled className="text-xs px-3 py-1 bg-gray-100 text-gray-400 rounded-full cursor-not-allowed font-medium">
-                          Next Image
-                        </button>
-                        <button disabled className="text-xs px-3 py-1 bg-gray-100 text-gray-400 rounded-full cursor-not-allowed font-medium">
-                          Upload Custom
-                        </button>
-                      </div>
+                      <ImageSelector
+                        key={`image-selector-${index}-${wordData.word}-${isSaving ? 'saving' : 'normal'}`}
+                        word={wordData.word}
+                        englishTranslation={wordData.englishTranslation || (sourceLanguage === 'English' ? wordData.word : '')}
+                        currentImageUrl={wordData.image}
+                        searchResults={wordData.imageResults || []}
+                        selectedIndex={wordData.imageSelectedIndex || 0}
+                        onImageSelect={(url) => {
+                          if (!isSaving) {
+                            handlePreviewImageSelect(index, url);
+                          }
+                        }}
+                        onImageRemove={() => {
+                          if (!isSaving) {
+                            handlePreviewImageRemove(index);
+                          }
+                        }}
+                        onSearchResults={(results, selectedIndex) => {
+                          if (!isSaving) {
+                            handlePreviewImageSearchResults(index, results, selectedIndex);
+                          }
+                        }}
+                        onEnglishTranslationUpdate={(translation) => {
+                          if (!isSaving) {
+                            // ✅ Save English translation when image search translates it
+                            console.log(`💾 Updating English translation for word at index ${index}: "${translation}"`);
+                            const updatedWords = [...processedWords];
+                            updatedWords[index] = { 
+                              ...updatedWords[index], 
+                              englishTranslation: translation 
+                            };
+                            setProcessedWords(updatedWords);
+                          }
+                        }}
+                        compact={true}
+                        sourceLanguage={sourceLanguage}
+                        disabled={isSaving}
+                      />
                     </div>
 
                     {/* Word */}
@@ -1214,6 +1612,34 @@ leer"
         {/* Back to Top Button */}
         <BackToTop />
       </div>
+      
+      {/* Validation Error Toast Notification */}
+      {validationError && (
+        <div className="fixed bottom-4 sm:bottom-6 left-4 right-4 sm:left-1/2 sm:right-auto sm:transform sm:-translate-x-1/2 z-50 animate-slide-up">
+          <div className="bg-white/95 backdrop-blur-md text-gray-800 px-4 sm:px-6 py-4 rounded-xl sm:rounded-2xl shadow-2xl border-2 border-red-200/50 w-full sm:min-w-[380px] sm:max-w-md">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+                <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="font-semibold text-sm sm:text-base text-gray-900">
+                  {validationError}
+                </p>
+              </div>
+              <button
+                onClick={() => setValidationError(null)}
+                className="flex-shrink-0 text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
