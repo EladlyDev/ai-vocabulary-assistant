@@ -24,6 +24,16 @@ function App() {
   // Ref to track unsaved changes from SetViewer
   const hasUnsavedChangesRef = useRef(false);
   
+  // First time load setup
+  useEffect(() => {
+    // Check if this is the first load (based on a flag)
+    const hasLoadedBefore = localStorage.getItem('hasLoadedBefore');
+    if (!hasLoadedBefore) {
+      // Set flag to prevent clearing on refresh
+      localStorage.setItem('hasLoadedBefore', 'true');
+    }
+  }, []);
+  
   // Fetch data from database
   const { data: groupsData = [], isLoading: groupsLoading, error: groupsError } = useGroups();
   const { data: setsData = [], isLoading: setsLoading, error: setsError } = useSets();
@@ -97,6 +107,7 @@ function App() {
   // Upload cancellation and active upload tracking
   const uploadCancelledRef = useRef(false);
   const uploadInProgressRef = useRef(false);
+  const [uploadInProgress, setUploadInProgress] = useState(false); // State for reactivity
   const hasCheckedResumeRef = useRef(false);
   
   // Browser back confirmation state
@@ -379,8 +390,28 @@ function App() {
     checkIncompleteUpload();
   }, [isLoading, mockSets, groups]); // Run when data is loaded
 
-  const handleCreateNewSet = () => {
-    setActiveSet({ name: 'New Set', words: [] });
+  // Store the selected group ID for new sets
+  const [selectedGroupForNewSet, setSelectedGroupForNewSet] = useState(null);
+
+  const handleCreateNewSet = (groupId) => {
+    console.log('handleCreateNewSet called with groupId:', groupId);
+    
+    // Ensure groupId is valid (not an event object)
+    const validGroupId = (groupId && typeof groupId !== 'object' && typeof groupId !== 'function') 
+      ? groupId 
+      : null;
+    
+    // Clear any corrupted backup
+    localStorage.removeItem('editorBackup');
+    
+    // Store the selected group ID separately
+    setSelectedGroupForNewSet(validGroupId);
+    
+    // If groupId is provided, pre-select that group for the new set
+    setActiveSet({ 
+      name: 'New Set', 
+      words: []
+    });
     setCurrentView({ name: 'editor' });
   };
 
@@ -444,8 +475,8 @@ function App() {
 
   const handleUpdateSet = (updatedSet) => {
     console.log('📦 handleUpdateSet called in MainApp');
-    console.log('Received updatedSet:', JSON.parse(JSON.stringify(updatedSet)));
-    console.log('Current activeSet before update:', JSON.parse(JSON.stringify(activeSet)));
+    console.log('Received updatedSet.id:', updatedSet?.id, 'name:', updatedSet?.name);
+    console.log('Current activeSet.id:', activeSet?.id, 'name:', activeSet?.name);
     
     setActiveSet(updatedSet);
     
@@ -720,6 +751,43 @@ function App() {
   };
 
   const handleSaveNewSet = async (newSet, targetGroupId = null) => {
+    // Clear the selected group for new set
+    setSelectedGroupForNewSet(null);
+    
+    // Save selected languages to localStorage for future use
+    const saveLanguageToRecent = (language) => {
+      if (!language || language.trim() === '') return;
+      
+      // Get recent languages from localStorage
+      const recentInStorage = localStorage.getItem('recentLanguages');
+      let recent = recentInStorage ? JSON.parse(recentInStorage) : [];
+      
+      // Remove if already exists
+      recent = recent.filter(lang => lang !== language);
+      // Add to beginning
+      recent.unshift(language);
+      // Keep only top 5
+      recent = recent.slice(0, 5);
+      localStorage.setItem('recentLanguages', JSON.stringify(recent));
+    };
+    
+    // Save both source and target languages
+    if (newSet.source_language) {
+      saveLanguageToRecent(newSet.source_language);
+    }
+    if (newSet.target_language) {
+      saveLanguageToRecent(newSet.target_language);
+    }
+    
+    console.log('🚀 handleSaveNewSet called with:', {
+      newSetName: newSet?.name,
+      wordsCount: newSet?.words?.length,
+      targetGroupId,
+      targetGroupIdType: typeof targetGroupId,
+      isObject: typeof targetGroupId === 'object',
+      isNull: targetGroupId === null
+    });
+    
     if (newSet.name.trim()) {
       try {
         // Determine which group to add to
@@ -755,6 +823,14 @@ function App() {
         }
 
         // Create the set first (wait for it to get real ID)
+        console.log('🔍 About to create set with clean data:', {
+          group_id: groupId,
+          name: newSet.name,
+          source_language: newSet.source_language || 'Auto-detect',
+          target_language: newSet.target_language || 'English',
+          wordsCount: newSet?.words?.length
+        });
+        
         const createdSet = await createSetMutation.mutateAsync({
           group_id: groupId,
           name: newSet.name,
@@ -775,6 +851,7 @@ function App() {
                 translation: wordLine.translation || '',
                 sentence: wordLine.sentence || null,
                 sentenceTranslation: wordLine.sentenceTranslation || null,
+                image: wordLine.image || null, // Include image
                 uploaded: false,
                 wordId: null
               };
@@ -837,7 +914,7 @@ function App() {
                   sentence: wordLine.sentence || null,
                   sentence_translation: wordLine.sentenceTranslation || null,
                   example: null,
-                  image_url: null,
+                  image_url: wordLine.image || null, // Include image from AI processing
                   pronunciation: null,
                   synonyms: [],
                   antonyms: [],
@@ -885,6 +962,7 @@ function App() {
           
           // Mark upload as in progress BEFORE starting batches
           uploadInProgressRef.current = true;
+          setUploadInProgress(true);
           
           // Reset cancel flag
           uploadCancelledRef.current = false;
@@ -897,6 +975,7 @@ function App() {
                 console.log('Upload cancelled, stopping batch processing');
                 uploadCancelledRef.current = false; // Reset flag
                 uploadInProgressRef.current = false; // Mark upload as complete
+                setUploadInProgress(false);
                 return;
               }
               
@@ -978,9 +1057,6 @@ function App() {
             // Also clear editor backup since set was created successfully
             localStorage.removeItem('editorBackup');
             
-            // Mark upload as complete
-            uploadInProgressRef.current = false;
-            
             // Final refetch to refresh UI with accurate database data
             // Use refetchQueries for immediate update (not invalidateQueries)
             console.log('🔄 Final refetch to display all words...');
@@ -997,6 +1073,11 @@ function App() {
             
             console.log('✅ Final refetch complete - all words should be visible');
             
+            // Mark upload as complete AFTER refetch so SetViewer can sync one last time
+            uploadInProgressRef.current = false;
+            setUploadInProgress(false);
+            console.log('✅ Upload complete - setting uploadInProgress to false');
+            
             // Hide progress notification after completion
             setTimeout(() => {
               setProgressNotification(null);
@@ -1010,6 +1091,7 @@ function App() {
               console.error('❌ Failed to create words:', err);
               setProgressNotification(null);
               uploadInProgressRef.current = false;
+              setUploadInProgress(false);
               // Keep upload queue so user can retry
               alert('Upload failed: ' + err.message);
             });
@@ -1017,7 +1099,12 @@ function App() {
         }
       } catch (err) {
         console.error('Failed to save set:', err);
-        alert('Failed to save set. Please try again.');
+        console.error('Error details:', {
+          message: err?.message,
+          stack: err?.stack,
+          newSet: { name: newSet?.name, wordsCount: newSet?.words?.length }
+        });
+        alert('Failed to save set. Please try again. Error: ' + (err?.message || 'Unknown error'));
       }
     }
   };
@@ -1167,8 +1254,12 @@ function App() {
       )}
       {currentView.name === 'editor' && (
         <SetEditor 
-          set={activeSet} 
-          onBack={handleShowDashboard}
+          set={activeSet}
+          defaultGroupId={selectedGroupForNewSet}
+          onBack={() => {
+            setSelectedGroupForNewSet(null); // Clear selected group on back
+            handleShowDashboard();
+          }}
           onUpdateSet={setActiveSet}
           onSaveSet={handleSaveNewSet}
           groups={groups}
@@ -1190,6 +1281,7 @@ function App() {
           onSearchChange={setSearchTerm}
           isUpdatingWord={updateWordMutation.isPending}
           isDeletingWord={deleteWordMutation.isPending}
+          uploadInProgress={uploadInProgress}
           onUnsavedChangesChange={(hasChanges) => {
             hasUnsavedChangesRef.current = hasChanges;
           }}

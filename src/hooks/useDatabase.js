@@ -193,7 +193,17 @@ export const useCreateSet = () => {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: createSet,
+    mutationFn: async (setData) => {
+      // Ensure the data is serializable before passing to createSet
+      const cleanData = {
+        group_id: setData.group_id,
+        name: setData.name,
+        source_language: setData.source_language,
+        target_language: setData.target_language
+      };
+      console.log('🧹 Clean set data for mutation:', cleanData);
+      return createSet(cleanData);
+    },
     onSuccess: (data, variables) => {
       // Immediately add the new set to the cache
       const previousSets = queryClient.getQueryData(['sets']);
@@ -217,6 +227,12 @@ export const useCreateSet = () => {
     },
     onError: (err) => {
       console.error('Failed to create set:', err);
+      console.error('Error details:', {
+        message: err?.message,
+        code: err?.code,
+        details: err?.details,
+        hint: err?.hint
+      });
     },
   });
 };

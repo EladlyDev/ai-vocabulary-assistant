@@ -1,4 +1,4 @@
-# Vocabulary Assistant
+# Hizma - Smart Vocabulary Learning
 
 A modern, responsive vocabulary learning application built with React and styled with Tailwind CSS. Create, manage, and study custom vocabulary sets with an intuitive interface designed for effective language learning.
 
