@@ -43,13 +43,15 @@ export const AuthProvider = ({ children }) => {
         password,
         options: {
           data: metadata,
+          // Use environment variable to ensure email confirmation links go to the correct domain
+          emailRedirectTo: `${process.env.REACT_APP_SITE_URL || window.location.origin}/login`,
         },
       });
       
       if (error) throw error;
       return { data, error: null };
     } catch (error) {
-      console.error('Error signing up:', error);
+      // Silently handle errors in production
       return { data: null, error };
     }
   };
@@ -64,7 +66,7 @@ export const AuthProvider = ({ children }) => {
       if (error) throw error;
       return { data, error: null };
     } catch (error) {
-      console.error('Error signing in:', error);
+      // Silently handle errors in production
       return { data: null, error };
     }
   };
@@ -75,7 +77,7 @@ export const AuthProvider = ({ children }) => {
       if (error) throw error;
       return { error: null };
     } catch (error) {
-      console.error('Error signing out:', error);
+      // Silently handle errors in production
       return { error };
     }
   };
@@ -83,13 +85,14 @@ export const AuthProvider = ({ children }) => {
   const resetPassword = async (email) => {
     try {
       const { data, error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/reset-password`,
+        // Use environment variable for consistent behavior in all environments
+        redirectTo: `${process.env.REACT_APP_SITE_URL || window.location.origin}/reset-password`,
       });
       
       if (error) throw error;
       return { data, error: null };
     } catch (error) {
-      console.error('Error resetting password:', error);
+      // Silently handle errors in production
       return { data: null, error };
     }
   };

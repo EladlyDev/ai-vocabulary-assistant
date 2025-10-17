@@ -18,7 +18,6 @@ const Signup = () => {
   // Redirect if already logged in
   useEffect(() => {
     if (!authLoading && user) {
-      console.log('User already logged in, redirecting to dashboard');
       navigate('/');
     }
   }, [user, authLoading, navigate]);
@@ -49,13 +48,9 @@ const Signup = () => {
     try {
       const { data, error } = await signUp(email, password, { full_name: name });
       
-      console.log('Signup response:', { data, error }); // Debug log
-      
       if (error) {
         // Enhanced error messages
         const errorMessage = error.message.toLowerCase();
-        
-        console.log('Signup error:', errorMessage); // Debug log
         
         if (errorMessage.includes('rate limit')) {
           setError('Too many signup attempts. Please try again in a few minutes.');
@@ -75,22 +70,17 @@ const Signup = () => {
         const sessionCreated = data?.session;
         const userIdentities = data?.user?.identities;
         
-        console.log('User created:', !!userCreated, 'Session created:', !!sessionCreated, 'Identities:', userIdentities?.length); // Debug log
-        
         // If user exists but has no identities, it means email is already registered
         // Supabase returns the user object without error for security (prevent email enumeration)
         if (userCreated && userIdentities && userIdentities.length === 0) {
-          console.log('Detected duplicate email (no identities)'); // Debug log
           setError('This email is already registered. Please log in instead.');
           setLoading(false);
         } else if (userCreated && !sessionCreated) {
           // Email confirmation is required - legitimate new user
-          console.log('Setting needsEmailConfirmation to true'); // Debug log
           setNeedsEmailConfirmation(true);
           setLoading(false);
         } else if (sessionCreated) {
           // User is automatically logged in (email confirmation disabled)
-          console.log('Setting success to true'); // Debug log
           setSuccess(true);
           setLoading(false);
           setTimeout(() => {
@@ -98,13 +88,11 @@ const Signup = () => {
           }, 2000);
         } else {
           // Unexpected state
-          console.log('Unexpected signup state'); // Debug log
           setError('Something went wrong. Please try again.');
           setLoading(false);
         }
       }
     } catch (err) {
-      console.error('Signup error:', err);
       setError('An unexpected error occurred. Please try again.');
       setLoading(false);
     }

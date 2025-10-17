@@ -16,7 +16,6 @@ const Login = () => {
   // Redirect if already logged in
   useEffect(() => {
     if (!authLoading && user) {
-      console.log('User already logged in, redirecting to dashboard');
       navigate('/');
     }
   }, [user, authLoading, navigate]);
@@ -51,7 +50,6 @@ const Login = () => {
         navigate('/');
       }
     } catch (err) {
-      console.error('Login error:', err);
       setError('An unexpected error occurred. Please try again.');
       setLoading(false);
     }
